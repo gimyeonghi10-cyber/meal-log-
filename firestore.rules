@@ -1,0 +1,33 @@
+rules_version = '2';
+
+// ==========================================================================
+// 식사일지 · 온결 — Cloud Firestore 보안 규칙
+//
+// · 로그인한 본인(uid)만 자기 데이터를 읽고 쓸 수 있습니다.
+// · 경로 구조
+//     users/{uid}/days/{YYYY-MM-DD}     하루 기록 (식사 배열 + 몸무게)
+//     users/{uid}/favorites/{id}        자주 먹는 음식
+//     users/{uid}/profile/settings      하루 목표 칼로리 등 설정
+// · 그 밖의 모든 경로는 전면 차단입니다.
+//
+// 적용: Firebase 콘솔 → Firestore Database → 규칙 탭에 붙여넣고 게시.
+// ==========================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // 본인 영역 전체 (days, favorites, profile ...)
+    match /users/{uid}/{document=**} {
+      allow read, write: if isOwner(uid);
+    }
+
+    // 그 외 경로는 모두 거부
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
