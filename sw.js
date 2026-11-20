@@ -2,12 +2,12 @@
    sw.js — 앱 셸 캐시 (오프라인에서도 기록 화면은 열린다)
    데이터는 localStorage / Firestore 가 담당하므로 여기서는 정적 파일만 캐시.
    ========================================================================== */
-const CACHE = 'meal-log-v1.2.1';
+const CACHE = 'meal-log-v1.2.2';
 const SHELL = [
   './',
   './index.html',
   './css/styles.css',
-  './fonts/PretendardVariable.woff2',
+  './fonts/NotoSansKR-Variable.woff2',
   './js/util.js',
   './js/foods.js',
   './js/store.js',

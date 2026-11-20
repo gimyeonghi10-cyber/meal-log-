@@ -42,20 +42,33 @@
     return !(a.x2 < b.x1 || a.x1 > b.x2 || a.y2 < b.y1 || a.y1 > b.y2);
   }
 
-  /** 장애물(다른 시리즈 점·이미 놓인 라벨)을 피해 라벨 y를 고른다 */
-  function placeLabel(boxes, cx, baseY, w, h, dir) {
-    const offsets = dir === 'up' ? [-13, -24, -36, -48, -60] : [19, 31, 43, 55, 67];
-    for (const dy of offsets) {
-      const y = baseY + dy;
-      const box = { x1: cx - w / 2 - 2, x2: cx + w / 2 + 2, y1: y - h / 2 - 1, y2: y + h / 2 + 1 };
+  /**
+   * 장애물(다른 시리즈의 점·이미 놓인 라벨)을 피해 라벨 자리를 고른다.
+   * 세로로만 밀면 선이 교차하는 날 두 라벨이 겹치므로, 좌우로도 조금씩 비켜 본다.
+   * 반환값 { x, y } — 그릴 좌표.
+   */
+  function placeLabel(boxes, cx, baseY, w, h, dir, bounds) {
+    const vy = dir === 'up' ? [-13, -24, -36, -48, -60, -72, -84] : [19, 31, 43, 55, 67, 79, 91];
+    const nudge = Math.min(9, w / 3);
+    const dxs = [0, -nudge, nudge, -nudge * 2, nudge * 2];
+    const lo = bounds ? bounds.x1 : -Infinity;
+    const hi = bounds ? bounds.x2 : Infinity;
+    const cands = [];
+    vy.forEach((dy, i) => dxs.forEach((dx, j) => cands.push({ dx, dy, cost: i * 5 + j })));
+    cands.sort((a, b) => a.cost - b.cost);
+    for (const c of cands) {
+      const x = Math.min(hi, Math.max(lo, cx + c.dx));
+      const y = baseY + c.dy;
+      const box = { x1: x - w / 2 - 2, x2: x + w / 2 + 2, y1: y - h / 2 - 1, y2: y + h / 2 + 1 };
       if (!boxes.some((b) => overlaps(b, box))) {
         boxes.push(box);
-        return y;
+        return { x, y };
       }
     }
-    const dy = offsets[offsets.length - 1];
-    boxes.push({ x1: cx - w / 2, x2: cx + w / 2, y1: baseY + dy - h / 2, y2: baseY + dy + h / 2 });
-    return baseY + dy;
+    const dy = vy[vy.length - 1];
+    const x = Math.min(hi, Math.max(lo, cx));
+    boxes.push({ x1: x - w / 2, x2: x + w / 2, y1: baseY + dy - h / 2, y2: baseY + dy + h / 2 });
+    return { x, y: baseY + dy };
   }
 
   function pointBox(p, r) {
@@ -158,7 +171,7 @@
         const show = n <= 8 || i % 2 === 0 || i === n - 1;
         if (!show) return;
         markup += `<text x="${xOf(i).toFixed(1)}" y="${baseY + 15}" text-anchor="middle"
-          font-size="${isNarrow ? 9.5 : 10.5}" font-weight="600" fill="${th.axis}">${U.esc(p.label)}</text>`;
+          font-size="${isNarrow ? 10 : 11}" font-weight="400" fill="${th.axis}">${U.esc(p.label)}</text>`;
       });
       markup += `</g>`;
 
@@ -232,21 +245,21 @@
         const y = scaleFor(t, panel.yKcal ? kcalScale : wScale);
         out += `<line x1="${padL}" x2="${width - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"
           stroke="${th.grid}" stroke-width="1"/>`;
-        out += `<text x="${padL - 7}" y="${(y + 3.4).toFixed(1)}" text-anchor="end" font-size="${isNarrow ? 9 : 10}"
-          font-weight="600" fill="${th.axis}">${U.num(t)}</text>`;
+        out += `<text x="${padL - 7}" y="${(y + 3.4).toFixed(1)}" text-anchor="end" font-size="${isNarrow ? 9.5 : 10.5}"
+          font-weight="400" fill="${th.axis}">${U.num(t)}</text>`;
       });
 
       if (panel.yKcal && panel.key === 'both') {
-        out += `<text x="${padL - 7}" y="${panel.top + 12}" text-anchor="end" font-size="9.5" font-weight="700"
+        out += `<text x="${padL - 7}" y="${panel.top + 12}" text-anchor="end" font-size="10.5" font-weight="500"
           fill="${th.axis}" letter-spacing=".04em">KCAL</text>`;
       }
       if (panel.key === 'kcal') {
-        out += `<text x="${padL}" y="${panel.top + 12}" font-size="10.5" font-weight="700"
-          fill="${th.label}" letter-spacing="-.01em">칼로리 <tspan fill="${th.axis}" font-weight="600">kcal</tspan></text>`;
+        out += `<text x="${padL}" y="${panel.top + 12}" font-size="11.5" font-weight="500"
+          fill="${th.label}" letter-spacing="-.01em">칼로리 <tspan fill="${th.axis}" font-weight="400">kcal</tspan></text>`;
       }
       if (panel.key === 'weight') {
-        out += `<text x="${padL}" y="${panel.top + 12}" font-size="10.5" font-weight="700"
-          fill="${th.weightText}" letter-spacing="-.01em">몸무게 <tspan fill="${th.weightAxis}" font-weight="600">kg</tspan></text>`;
+        out += `<text x="${padL}" y="${panel.top + 12}" font-size="11.5" font-weight="500"
+          fill="${th.weightText}" letter-spacing="-.01em">몸무게 <tspan fill="${th.weightAxis}" font-weight="400">kg</tspan></text>`;
       }
 
       // 목표선
@@ -255,10 +268,14 @@
         if (gy >= top - 1 && gy <= bottom + 1) {
           out += `<line x1="${padL}" x2="${width - padR}" y1="${gy.toFixed(1)}" y2="${gy.toFixed(1)}"
             stroke="${th.goal}" stroke-width="1.3" stroke-dasharray="5 5"/>`;
-          out += `<text x="${padL + 4}" y="${(gy - 6).toFixed(1)}" text-anchor="start" font-size="9.5"
-            font-weight="700" fill="${th.goalText}">목표 ${U.num(goal)}</text>`;
+          out += `<text x="${padL + 4}" y="${(gy - 6).toFixed(1)}" text-anchor="start" font-size="10.5"
+            font-weight="500" fill="${th.goalText}">목표 ${U.num(goal)}</text>`;
         }
       }
+
+      // 두 시리즈가 같은 '이미 놓인 라벨' 목록을 나눠 쓴다(선이 교차해도 라벨이 겹치지 않게).
+      const placeBoxes = kcalPts.filter(Boolean).map((pt) => pointBox(pt, 7))
+        .concat(weightPts.filter(Boolean).map((pt) => pointBox(pt, 7)));
 
       const drawSeries = (pts, color, scale, gradId, dir, labelColor, obstacles, kind) => {
         const valid = pts.filter(Boolean);
@@ -294,20 +311,27 @@
             stroke="${color}" stroke-width="2.4"/>`;
         });
 
-        // 수치 라벨 — 다른 시리즈의 점과 이미 놓인 라벨을 장애물로 삼는다
-        const boxes = obstacles.map((p) => pointBox(p, 7));
+        // 수치 라벨 — 다른 시리즈의 점과 이미 놓인 라벨을 장애물로 삼는다.
+        // 배경 사각형을 먼저 모두 깔고 글자를 그 위에 얹어, 라벨끼리 겹쳐도 글자가 가려지지 않게 한다.
+        const labelBoxes = [];
         valid.forEach((pt) => {
           const label = labelText(pt.v, kind || 'kcal');
+          // 좁은 화면은 한 칸이 40px 남짓이라 라벨을 조금 작게 잡아 서로 비켜 앉을 자리를 남긴다.
           const fs = isNarrow ? 9.5 : 10.5;
           const w = textWidth(label, fs);
           const h = fs + 2;
-          const ly = placeLabel(boxes, pt.x, pt.y, w, h, dir);
-          out += `<rect x="${(pt.x - w / 2 - 2.5).toFixed(1)}" y="${(ly - h / 2 - 0.5).toFixed(1)}"
-            width="${(w + 5).toFixed(1)}" height="${(h + 1).toFixed(1)}" rx="4"
+          const at = placeLabel(placeBoxes, pt.x, pt.y, w, h, dir, { x1: padL + w / 2, x2: width - padR - w / 2 });
+          labelBoxes.push({ x: at.x, y: at.y, w, h, fs, label });
+        });
+        labelBoxes.forEach((b) => {
+          out += `<rect x="${(b.x - b.w / 2 - 2.5).toFixed(1)}" y="${(b.y - b.h / 2 - 0.5).toFixed(1)}"
+            width="${(b.w + 5).toFixed(1)}" height="${(b.h + 1).toFixed(1)}" rx="4"
             fill="${th.surface}" fill-opacity=".96"/>`;
-          out += `<text x="${pt.x.toFixed(1)}" y="${(ly + fs * 0.34).toFixed(1)}" text-anchor="middle"
-            font-size="${fs}" font-weight="700" fill="${labelColor}"
-            style="font-variant-numeric:tabular-nums">${U.esc(label)}</text>`;
+        });
+        labelBoxes.forEach((b) => {
+          out += `<text x="${b.x.toFixed(1)}" y="${(b.y + b.fs * 0.34).toFixed(1)}" text-anchor="middle"
+            font-size="${b.fs}" font-weight="500" fill="${labelColor}"
+            style="font-variant-numeric:tabular-nums">${U.esc(b.label)}</text>`;
         });
       };
 
@@ -324,21 +348,21 @@
       // 오른쪽 몸무게 축 (함께 보기)
       if (panel.yWeight && panel.yKcal) {
         const rx = width - padR + 7;
-        out += `<text x="${rx}" y="${panel.top + 12}" text-anchor="start" font-size="9.5" font-weight="700"
+        out += `<text x="${rx}" y="${panel.top + 12}" text-anchor="start" font-size="10.5" font-weight="500"
           fill="${th.weightAxis}" letter-spacing=".04em">KG</text>`;
         wScale.ticks.forEach((t) => {
           const y = scaleFor(t, wScale);
-          out += `<text x="${rx}" y="${(y + 3.4).toFixed(1)}" text-anchor="start" font-size="${isNarrow ? 9 : 10}"
-            font-weight="600" fill="${th.weightAxis}">${U.kg(t)}</text>`;
+          out += `<text x="${rx}" y="${(y + 3.4).toFixed(1)}" text-anchor="start" font-size="${isNarrow ? 9.5 : 10.5}"
+            font-weight="400" fill="${th.weightAxis}">${U.kg(t)}</text>`;
         });
       }
 
       if (!hasKcal && panel.yKcal) {
-        out += `<text x="${padL + plotW / 2}" y="${top + plotH / 2}" text-anchor="middle" font-size="12"
+        out += `<text x="${padL + plotW / 2}" y="${top + plotH / 2}" text-anchor="middle" font-size="12.5"
           fill="${th.axis}">칼로리 기록이 없어요</text>`;
       }
       if (!hasWeight && panel.key === 'weight') {
-        out += `<text x="${padL + plotW / 2}" y="${top + plotH / 2}" text-anchor="middle" font-size="12"
+        out += `<text x="${padL + plotW / 2}" y="${top + plotH / 2}" text-anchor="middle" font-size="12.5"
           fill="${th.axis}">몸무게 기록이 없어요</text>`;
       }
 

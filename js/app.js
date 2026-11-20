@@ -177,7 +177,7 @@
       }).join('');
       legend.innerHTML = MEALS.map((t) => `
         <li><span class="swatch" style="background:${mealColor(t)}"></span>${LABEL[t]}
-          <b style="color:var(--ink-3);font-weight:700">${U.num(totals.byType[t])}</b></li>`).join('');
+          <b style="color:var(--ink-3);font-weight:500">${U.num(totals.byType[t])}</b></li>`).join('');
     }
 
     renderDayNote(day);
@@ -561,8 +561,8 @@
 
     const rows = day.meals.length
       ? day.meals.map((m) => `<div class="day-preview__row">
-            <span style="min-width:34px;color:var(--muted);font-weight:700;font-size:11.5px">${LABEL[m.type]}</span>
-            <b>${U.esc(m.name)}</b>${m.note ? `<span>· ${U.esc(m.note)}</span>` : ''}
+            <span class="day-preview__meal" style="min-width:34px;color:var(--muted);font-weight:500;font-size:13px">${LABEL[m.type]}</span>
+            <b>${U.esc(m.name)}</b>${m.note ? `<span class="day-preview__memo">· ${U.esc(m.note)}</span>` : ''}
             <em>${U.num(m.kcal)} kcal</em>
           </div>`).join('')
       : `<div class="empty-state"><strong>이 날은 기록이 없어요</strong><p>지금 바로 채워 넣을 수 있어요.</p></div>`;
@@ -1687,7 +1687,7 @@
     // 설정 화면의 사전 권수를 실제 데이터에 맞춘다
     if (FOOD_DB) {
       const meta = document.querySelector('.app-meta');
-      if (meta) meta.textContent = `식사일지 v1.2.1 · 한국 음식 칼로리 사전 ${FOOD_DB.count}종 · 화이트/카키/네이비 테마 · 로컬 저장 + Firebase 선택 동기화`;
+      if (meta) meta.textContent = `식사일지 v1.2.2 · 한국 음식 칼로리 사전 ${FOOD_DB.count}종 · 화이트/카키/네이비 테마 · 로컬 저장 + Firebase 선택 동기화`;
     }
 
     Store.subscribe((s, change) => {
