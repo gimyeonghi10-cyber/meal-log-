@@ -215,6 +215,12 @@
             Store.state.settings.goal = U.clamp(U.toInt(settingsSnap.data().goal) || 2000, 800, 6000);
           }
         }
+        if (settingsSnap && settingsSnap.exists() && settingsSnap.data().theme) {
+          const remoteTheme = settingsSnap.data().theme;
+          if (['white', 'khaki', 'navy'].indexOf(remoteTheme) >= 0 && remoteTheme !== Store.theme()) {
+            Store.setTheme(remoteTheme, { source: 'remote' });
+          }
+        }
 
         // 로컬에만 있는 날짜 / 원격보다 최신인 날짜는 올린다
         Object.keys(Store.state.days).forEach((date) => {
@@ -282,11 +288,16 @@
 
       this._unsubSettings = fs.onSnapshot(settingsRef, (snap) => {
         if (!snap.exists()) return;
-        const goal = U.toInt(snap.data().goal);
+        const data = snap.data();
+        const goal = U.toInt(data.goal);
         if (goal && goal !== Store.state.settings.goal) {
           Store.state.settings.goal = U.clamp(goal, 800, 6000);
           Store.persist();
           Store._emit({ type: 'settings', source: 'remote' });
+        }
+        const theme = data.theme;
+        if (['white', 'khaki', 'navy'].indexOf(theme) >= 0 && theme !== Store.theme()) {
+          Store.setTheme(theme, { source: 'remote' });
         }
       }, () => { /* noop */ });
 
@@ -316,6 +327,8 @@
         await fs.setDoc(ref, {
           date,
           weight: day.weight == null ? null : day.weight,
+          dayNote: day.dayNote || '',
+          dayNoteUpdatedAt: day.dayNoteUpdatedAt || 0,
           meals: day.meals.map((m) => ({
             id: m.id, type: m.type, name: m.name, kcal: m.kcal,
             note: m.note || '', photo: m.photo || null,
@@ -359,6 +372,7 @@
       try {
         await fs.setDoc(fs.doc(this._db, 'users', this.user.uid, 'profile', 'settings'), {
           goal: Store.goal(),
+          theme: Store.theme(),
           updatedAt: Date.now(),
         }, { merge: true });
       } catch (e) {

@@ -11,6 +11,27 @@
   const GRID = '#E7EDF3';
   const FAINT = '#94A3B8';
 
+  /** 테마별 색은 CSS 변수에서 읽는다 (화이트/카키/네이비) */
+  function cssVar(name, fallback) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name);
+    return String(v || '').trim() || fallback;
+  }
+
+  function themeColors() {
+    return {
+      kcal: cssVar('--chart-kcal', NAVY),
+      weight: cssVar('--chart-weight', MINT),
+      weightText: cssVar('--chart-weight-text', '#059669'),
+      weightAxis: cssVar('--chart-weight-axis', '#34D399'),
+      grid: cssVar('--chart-grid', GRID),
+      axis: cssVar('--chart-axis', FAINT),
+      surface: cssVar('--chart-surface', '#FFFFFF'),
+      goal: cssVar('--chart-goal', '#CBD5E1'),
+      goalText: cssVar('--chart-goal-text', '#A3B1C2'),
+      label: cssVar('--chart-label', '#475569'),
+    };
+  }
+
   function textWidth(s, fs) {
     let w = 0;
     for (const ch of String(s)) w += /[0-9.,]/.test(ch) ? fs * 0.56 : fs * 0.62;
@@ -73,6 +94,7 @@
       const goal = Number(opts.goal) || 2000;
       container.innerHTML = '';
       if (!points.length) return;
+      const th = themeColors();
 
       const width = Math.max(300, Math.round(container.clientWidth || 720));
       const isNarrow = width < 520;
@@ -93,11 +115,11 @@
 
       let markup = `<defs>
           <linearGradient id="kcalArea" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="${NAVY}" stop-opacity=".09"/>
-            <stop offset="100%" stop-color="${NAVY}" stop-opacity="0"/>
+            <stop offset="0%" stop-color="${th.kcal}" stop-opacity=".09"/>
+            <stop offset="100%" stop-color="${th.kcal}" stop-opacity="0"/>
           </linearGradient>
           <linearGradient id="weightArea" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="${MINT}" stop-opacity=".13"/>
+            <stop offset="0%" stop-color="${th.weight}" stop-opacity=".13"/>
             <stop offset="100%" stop-color="${MINT}" stop-opacity="0"/>
           </linearGradient>
         </defs>`;
@@ -124,7 +146,7 @@
       panels.forEach((panel) => {
         markup += this._panelMarkup({
           panel, points, width, height: panel.height, goal, kcalScale, weightScale: wScale,
-          hasKcal, hasWeight, isNarrow, padL, padR, plotW, slot, xOf,
+          hasKcal, hasWeight, isNarrow, padL, padR, plotW, slot, xOf, th,
         });
       });
 
@@ -136,7 +158,7 @@
         const show = n <= 8 || i % 2 === 0 || i === n - 1;
         if (!show) return;
         markup += `<text x="${xOf(i).toFixed(1)}" y="${baseY + 15}" text-anchor="middle"
-          font-size="${isNarrow ? 9.5 : 10.5}" font-weight="600" fill="${FAINT}">${U.esc(p.label)}</text>`;
+          font-size="${isNarrow ? 9.5 : 10.5}" font-weight="600" fill="${th.axis}">${U.esc(p.label)}</text>`;
       });
       markup += `</g>`;
 
@@ -157,7 +179,7 @@
       container.appendChild(tip);
 
       const guide = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      guide.setAttribute('stroke', '#CBD5E1');
+      guide.setAttribute('stroke', th.goal);
       guide.setAttribute('stroke-width', '1');
       guide.setAttribute('stroke-dasharray', '3 4');
       guide.style.opacity = '0';
@@ -192,7 +214,7 @@
 
     _panelMarkup(ctx) {
       const { panel, points, width, height, goal, kcalScale, weightScale: wScale,
-        hasKcal, hasWeight, isNarrow, padL, padR, plotW, slot, xOf } = ctx;
+        hasKcal, hasWeight, isNarrow, padL, padR, plotW, slot, xOf, th } = ctx;
 
       const top = panel.top + 25;
       const bottom = panel.top + height - 24;
@@ -209,22 +231,22 @@
       ticks.forEach((t) => {
         const y = scaleFor(t, panel.yKcal ? kcalScale : wScale);
         out += `<line x1="${padL}" x2="${width - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"
-          stroke="${GRID}" stroke-width="1"/>`;
+          stroke="${th.grid}" stroke-width="1"/>`;
         out += `<text x="${padL - 7}" y="${(y + 3.4).toFixed(1)}" text-anchor="end" font-size="${isNarrow ? 9 : 10}"
-          font-weight="600" fill="${FAINT}">${U.num(t)}</text>`;
+          font-weight="600" fill="${th.axis}">${U.num(t)}</text>`;
       });
 
       if (panel.yKcal && panel.key === 'both') {
         out += `<text x="${padL - 7}" y="${panel.top + 12}" text-anchor="end" font-size="9.5" font-weight="700"
-          fill="${FAINT}" letter-spacing=".04em">KCAL</text>`;
+          fill="${th.axis}" letter-spacing=".04em">KCAL</text>`;
       }
       if (panel.key === 'kcal') {
         out += `<text x="${padL}" y="${panel.top + 12}" font-size="10.5" font-weight="700"
-          fill="#475569" letter-spacing="-.01em">칼로리 <tspan fill="${FAINT}" font-weight="600">kcal</tspan></text>`;
+          fill="${th.label}" letter-spacing="-.01em">칼로리 <tspan fill="${th.axis}" font-weight="600">kcal</tspan></text>`;
       }
       if (panel.key === 'weight') {
         out += `<text x="${padL}" y="${panel.top + 12}" font-size="10.5" font-weight="700"
-          fill="#059669" letter-spacing="-.01em">몸무게 <tspan fill="#34D399" font-weight="600">kg</tspan></text>`;
+          fill="${th.weightText}" letter-spacing="-.01em">몸무게 <tspan fill="${th.weightAxis}" font-weight="600">kg</tspan></text>`;
       }
 
       // 목표선
@@ -232,13 +254,13 @@
         const gy = scaleFor(goal, kcalScale);
         if (gy >= top - 1 && gy <= bottom + 1) {
           out += `<line x1="${padL}" x2="${width - padR}" y1="${gy.toFixed(1)}" y2="${gy.toFixed(1)}"
-            stroke="#CBD5E1" stroke-width="1.3" stroke-dasharray="5 5"/>`;
+            stroke="${th.goal}" stroke-width="1.3" stroke-dasharray="5 5"/>`;
           out += `<text x="${padL + 4}" y="${(gy - 6).toFixed(1)}" text-anchor="start" font-size="9.5"
-            font-weight="700" fill="#A3B1C2">목표 ${U.num(goal)}</text>`;
+            font-weight="700" fill="${th.goalText}">목표 ${U.num(goal)}</text>`;
         }
       }
 
-      const drawSeries = (pts, color, scale, gradId, dir, labelColor, obstacles) => {
+      const drawSeries = (pts, color, scale, gradId, dir, labelColor, obstacles, kind) => {
         const valid = pts.filter(Boolean);
 
         if (gradId && valid.length > 1) {
@@ -268,21 +290,21 @@
         }
 
         valid.forEach((pt) => {
-          out += `<circle cx="${pt.x.toFixed(1)}" cy="${pt.y.toFixed(1)}" r="4.2" fill="#fff"
+          out += `<circle cx="${pt.x.toFixed(1)}" cy="${pt.y.toFixed(1)}" r="4.2" fill="${th.surface}"
             stroke="${color}" stroke-width="2.4"/>`;
         });
 
         // 수치 라벨 — 다른 시리즈의 점과 이미 놓인 라벨을 장애물로 삼는다
         const boxes = obstacles.map((p) => pointBox(p, 7));
         valid.forEach((pt) => {
-          const label = labelText(pt.v, color === MINT ? 'weight' : 'kcal');
+          const label = labelText(pt.v, kind || 'kcal');
           const fs = isNarrow ? 9.5 : 10.5;
           const w = textWidth(label, fs);
           const h = fs + 2;
           const ly = placeLabel(boxes, pt.x, pt.y, w, h, dir);
           out += `<rect x="${(pt.x - w / 2 - 2.5).toFixed(1)}" y="${(ly - h / 2 - 0.5).toFixed(1)}"
             width="${(w + 5).toFixed(1)}" height="${(h + 1).toFixed(1)}" rx="4"
-            fill="#FFFFFF" fill-opacity=".94"/>`;
+            fill="${th.surface}" fill-opacity=".96"/>`;
           out += `<text x="${pt.x.toFixed(1)}" y="${(ly + fs * 0.34).toFixed(1)}" text-anchor="middle"
             font-size="${fs}" font-weight="700" fill="${labelColor}"
             style="font-variant-numeric:tabular-nums">${U.esc(label)}</text>`;
@@ -292,32 +314,32 @@
       const labelText = (v, kind) => (kind === 'kcal' ? U.num(Math.round(v)) : U.kg(v));
 
       if (panel.yKcal && hasKcal) {
-        drawSeries(kcalPts, NAVY, kcalScale, 'kcalArea', 'up', '#1E293B', weightPts.filter(Boolean));
+        drawSeries(kcalPts, th.kcal, kcalScale, 'kcalArea', 'up', th.kcal, weightPts.filter(Boolean), 'kcal');
       }
       if (hasWeight && (panel.yWeight || panel.key === 'weight')) {
-        drawSeries(weightPts, MINT, wScale, panel.key === 'weight' ? 'weightArea' : null,
-          panel.yKcal ? 'down' : 'up', '#059669', kcalPts.filter(Boolean));
+        drawSeries(weightPts, th.weight, wScale, panel.key === 'weight' ? 'weightArea' : null,
+          panel.yKcal ? 'down' : 'up', th.weightText, kcalPts.filter(Boolean), 'weight');
       }
 
       // 오른쪽 몸무게 축 (함께 보기)
       if (panel.yWeight && panel.yKcal) {
         const rx = width - padR + 7;
         out += `<text x="${rx}" y="${panel.top + 12}" text-anchor="start" font-size="9.5" font-weight="700"
-          fill="#34D399" letter-spacing=".04em">KG</text>`;
+          fill="${th.weightAxis}" letter-spacing=".04em">KG</text>`;
         wScale.ticks.forEach((t) => {
           const y = scaleFor(t, wScale);
           out += `<text x="${rx}" y="${(y + 3.4).toFixed(1)}" text-anchor="start" font-size="${isNarrow ? 9 : 10}"
-            font-weight="600" fill="#34D399">${U.kg(t)}</text>`;
+            font-weight="600" fill="${th.weightAxis}">${U.kg(t)}</text>`;
         });
       }
 
       if (!hasKcal && panel.yKcal) {
         out += `<text x="${padL + plotW / 2}" y="${top + plotH / 2}" text-anchor="middle" font-size="12"
-          fill="${FAINT}">칼로리 기록이 없어요</text>`;
+          fill="${th.axis}">칼로리 기록이 없어요</text>`;
       }
       if (!hasWeight && panel.key === 'weight') {
         out += `<text x="${padL + plotW / 2}" y="${top + plotH / 2}" text-anchor="middle" font-size="12"
-          fill="${FAINT}">몸무게 기록이 없어요</text>`;
+          fill="${th.axis}">몸무게 기록이 없어요</text>`;
       }
 
       return out + `</g>`;
@@ -325,7 +347,9 @@
 
     /** 작은 몸무게 스파크라인 */
     sparkline(container, series, opts) {
-      const o = Object.assign({ color: MINT, height: 44 }, opts || {});
+      const color = opts && opts.color ? opts.color : cssVar('--chart-weight', MINT);
+      const surface = cssVar('--chart-surface', '#FFFFFF');
+      const o = Object.assign({ color, height: 44 }, opts || {});
       container.innerHTML = '';
       if (!series || series.length < 1) return;
       const w = Math.max(120, Math.round(container.clientWidth || 260));
@@ -352,7 +376,7 @@
       svg.innerHTML = `
         <path d="${area}" fill="${o.color}" fill-opacity=".08"/>
         <path d="${d}" fill="none" stroke="${o.color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="3.4" fill="#fff" stroke="${o.color}" stroke-width="2"/>
+        <circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="3.4" fill="${surface}" stroke="${o.color}" stroke-width="2"/>
       `;
       container.appendChild(svg);
     },

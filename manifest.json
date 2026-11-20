@@ -1,7 +1,7 @@
 {
   "name": "식사일지 · 온결",
   "short_name": "식사일지",
-  "description": "식사와 칼로리, 몸무게를 하루 단위로 기록하고 달력과 그래프로 확인하는 개인 일지.",
+  "description": "식사와 칼로리, 몸무게를 하루 단위로 기록하고 달력과 그래프로 확인하는 개인 일지. 한국 음식 칼로리 사전 포함.",
   "lang": "ko",
   "dir": "ltr",
   "start_url": "./index.html",
@@ -23,6 +23,12 @@
       "short_name": "오늘",
       "url": "./index.html?tab=record",
       "description": "오늘의 식사와 몸무게 기록하기"
+    },
+    {
+      "name": "메모 보기",
+      "short_name": "메모",
+      "url": "./index.html?tab=memo",
+      "description": "일일 메모를 쓰고 음식 메모까지 모아보기"
     },
     {
       "name": "통계 보기",

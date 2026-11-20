@@ -9,6 +9,8 @@
   const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack'];
   const MEAL_LABEL = { breakfast: '아침', lunch: '점심', dinner: '저녁', snack: '간식' };
   const MEAL_ORDER = { breakfast: 0, lunch: 1, dinner: 2, snack: 3 };
+  const THEMES = ['white', 'khaki', 'navy'];
+  const NOTE_MAX = 1000;
 
   function todayISO() { return U.todayISO(); }
 
@@ -17,7 +19,7 @@
       version: 2,
       days: {},
       favorites: [],
-      settings: { goal: 2000 },
+      settings: { goal: 2000, theme: 'white' },
       meta: { createdAt: Date.now(), lastBackupAt: null },
     };
   }
@@ -35,14 +37,21 @@
     };
   }
 
+  function normNote(v) {
+    return String(v == null ? '' : v).slice(0, NOTE_MAX);
+  }
+
   function normDay(d, date) {
     const day = {
       date: d.date || date,
       meals: Array.isArray(d.meals) ? d.meals.map((m) => normMeal(m)).filter((m) => m.name) : [],
       weight: d.weight == null || d.weight === '' ? null : Number(d.weight),
+      dayNote: normNote(d.dayNote),
+      dayNoteUpdatedAt: Number(d.dayNoteUpdatedAt) || 0,
       updatedAt: Number(d.updatedAt) || Date.now(),
     };
     if (!Number.isFinite(day.weight) || day.weight <= 0) day.weight = null;
+    if (!day.dayNote) { day.dayNote = ''; day.dayNoteUpdatedAt = 0; }
     return day;
   }
 
@@ -86,6 +95,8 @@
       const s = emptyState();
       s.meta = Object.assign(s.meta, src.meta || {});
       s.settings.goal = U.clamp(U.toInt(src.settings && src.settings.goal) || 2000, 800, 6000);
+      const theme = src.settings && src.settings.theme;
+      s.settings.theme = THEMES.indexOf(theme) >= 0 ? theme : 'white';
       if (src.days && typeof src.days === 'object') {
         Object.keys(src.days).forEach((date) => {
           if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
@@ -138,7 +149,7 @@
     /** 화면 렌더용: 항상 객체를 돌려준다 (기록을 새로 만들지 않음) */
     viewDay(date) {
       const d = this.state.days[date];
-      if (!d) return { date, meals: [], weight: null, updatedAt: 0 };
+      if (!d) return { date, meals: [], weight: null, dayNote: '', dayNoteUpdatedAt: 0, updatedAt: 0 };
       return d;
     },
 
@@ -203,7 +214,9 @@
 
     _ensureDay(date) {
       if (!this.state.days[date]) {
-        this.state.days[date] = { date, meals: [], weight: null, updatedAt: Date.now() };
+        this.state.days[date] = {
+          date, meals: [], weight: null, dayNote: '', dayNoteUpdatedAt: 0, updatedAt: Date.now(),
+        };
       }
       return this.state.days[date];
     },
@@ -235,7 +248,7 @@
       const before = day.meals.length;
       day.meals = day.meals.filter((m) => m.id !== id);
       if (day.meals.length === before) return false;
-      if (!day.meals.length && day.weight == null) {
+      if (!day.meals.length && day.weight == null && !day.dayNote) {
         delete this.state.days[date];
       } else {
         day.updatedAt = Date.now();
@@ -243,6 +256,22 @@
       this.persist();
       this._emit({ type: 'day', date, source: 'local' });
       return true;
+    },
+
+    /** 삭제 되돌리기 — 원래 id·createdAt 그대로 되살린다 */
+    restoreMeal(date, meal) {
+      const day = this._ensureDay(date);
+      const clean = normMeal(meal, meal.type);
+      if (!clean.name) return null;
+      if (day.meals.some((m) => m.id === clean.id)) return clean;
+      clean.createdAt = Number(meal.createdAt) || clean.createdAt;
+      clean.updatedAt = Date.now();
+      day.meals.push(clean);
+      day.meals.sort((a, b) => (MEAL_ORDER[a.type] - MEAL_ORDER[b.type]) || (a.createdAt - b.createdAt));
+      day.updatedAt = Date.now();
+      this.persist();
+      this._emit({ type: 'day', date, source: 'local' });
+      return clean;
     },
 
     moveMeal(date, id, type) {
@@ -266,7 +295,7 @@
       }
       const day = this._ensureDay(date);
       day.weight = value == null ? null : Math.round(value * 10) / 10;
-      if (!day.meals.length && day.weight == null) {
+      if (!day.meals.length && day.weight == null && !day.dayNote) {
         delete this.state.days[date];
       } else {
         day.updatedAt = Date.now();
@@ -274,6 +303,40 @@
       this.persist();
       this._emit({ type: 'day', date, source: 'local' });
       return { ok: true, weight: day.weight };
+    },
+
+    /** 일일 메모 — 빈 값이면 메모를 지운다 */
+    setDayNote(date, text) {
+      const note = normNote(text).trim() === '' ? '' : normNote(text);
+      const day = this._ensureDay(date);
+      day.dayNote = note;
+      day.dayNoteUpdatedAt = note ? Date.now() : 0;
+      if (!day.meals.length && day.weight == null && !day.dayNote) {
+        delete this.state.days[date];
+      } else {
+        day.updatedAt = Date.now();
+      }
+      this.persist();
+      this._emit({ type: 'day', date, source: 'local' });
+      return day.dayNote;
+    },
+
+    clearDayNote(date) {
+      return this.setDayNote(date, '');
+    },
+
+    theme() {
+      const t = this.state.settings.theme;
+      return THEMES.indexOf(t) >= 0 ? t : 'white';
+    },
+
+    setTheme(name, opts) {
+      const theme = THEMES.indexOf(name) >= 0 ? name : 'white';
+      if (this.state.settings.theme === theme) return theme;
+      this.state.settings.theme = theme;
+      this.persist();
+      this._emit({ type: 'settings', source: (opts && opts.source) || 'local' });
+      return theme;
     },
 
     setGoal(goal) {

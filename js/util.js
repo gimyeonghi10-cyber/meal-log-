@@ -40,6 +40,12 @@
     },
 
     num: (n) => (n == null || n === '' || Number.isNaN(Number(n)) ? '—' : Number(n).toLocaleString('ko-KR')),
+    /** 1732000000000 → '11/20 14:05' */
+    fmtStamp(ms) {
+      const d = new Date(Number(ms) || 0);
+      if (!Number(ms)) return '—';
+      return `${d.getMonth() + 1}/${d.getDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    },
     kcal: (n) => `${Number(n || 0).toLocaleString('ko-KR')}`,
     kg: (n, digits) => {
       if (n == null || n === '' || Number.isNaN(Number(n))) return '—';
@@ -138,6 +144,39 @@
         el.classList.add('is-out');
         setTimeout(() => el.remove(), 220);
       }, 2400);
+    },
+
+    /** 되돌리기 같은 동작 버튼이 붙은 토스트 (삭제 실수 방지) */
+    toastAction(msg, opts) {
+      const o = opts || {};
+      const stack = document.getElementById('toastStack');
+      if (!stack) return { close() {} };
+      const el = document.createElement('div');
+      el.className = 'toast toast--action' + (o.kind === 'warn' ? ' toast--warn' : '');
+      el.innerHTML = `<span class="toast__dot"></span><span>${U.esc(msg)}</span>`;
+      let timer = null;
+      let closed = false;
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        clearTimeout(timer);
+        el.classList.add('is-out');
+        setTimeout(() => el.remove(), 220);
+      };
+      if (o.action) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'toast__btn';
+        btn.textContent = o.action;
+        btn.addEventListener('click', () => {
+          close();
+          try { if (o.onAction) o.onAction(); } catch (e) { console.error(e); }
+        });
+        el.appendChild(btn);
+      }
+      stack.appendChild(el);
+      timer = setTimeout(close, o.duration || 6000);
+      return { close };
     },
 
     download(filename, text, mime) {

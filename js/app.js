@@ -23,6 +23,22 @@
 
   const MEAL_COLORS = { breakfast: '#0F172A', lunch: '#334155', dinner: '#94A3B8', snack: '#10B981' };
 
+  const THEMES = {
+    white: { label: '화이트', color: '#FFFFFF' },
+    khaki: { label: '카키', color: '#EEECE0' },
+    navy: { label: '네이비', color: '#0A111E' },
+  };
+  const THEME_ORDER = ['white', 'khaki', 'navy'];
+
+  /** 테마별 색은 CSS 변수에서 읽는다 */
+  function cssVar(name, fallback) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name);
+    return String(v || '').trim() || fallback;
+  }
+  function mealColor(type) {
+    return cssVar(`--meal-${type}`, MEAL_COLORS[type]);
+  }
+
   const state = {
     date: U.todayISO(),
     tab: 'record',
@@ -32,8 +48,13 @@
     statsAnchor: U.todayISO(),
     chartMode: 'together',
     meal: null,              // 편집 중인 음식 {id,type,date}
+    mealPick: null,          // 사전에서 고른 음식 {food, mult, autoName}
     photo: null,
     lastFavFlash: 0,
+    memoFilter: 'all',       // all | day | food
+    memoSearch: '',
+    memoDirty: false,        // 메모 입력창에 저장하지 않은 변경이 있는지
+    memoLoadedDate: null,    // 입력창에 얹어 둔 날짜
   };
 
   const $ = U.$;
@@ -42,11 +63,39 @@
   /* ============================================================== render */
 
   function render(change) {
+    applyTheme(Store.theme());
     renderBadge();
     if (state.tab === 'record') renderRecord();
     if (state.tab === 'calendar') renderCalendar();
     if (state.tab === 'stats') renderStats();
+    if (state.tab === 'memo') renderMemo();
     renderSettings();
+  }
+
+  /* --------------------------------------------------------------- theme */
+
+  function applyTheme(name) {
+    const theme = THEMES[name] ? name : 'white';
+    const root = document.documentElement;
+    if (theme === 'white') delete root.dataset.theme;
+    else root.dataset.theme = theme;
+
+    const meta = $('#metaThemeColor');
+    if (meta) meta.setAttribute('content', THEMES[theme].color);
+
+    const quick = $('#btnThemeQuick');
+    if (quick) {
+      quick.dataset.theme = theme;
+      quick.title = `배경 테마: ${THEMES[theme].label} · 누르면 ${THEMES[THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % 3]].label}`;
+      quick.setAttribute('aria-label', `배경 테마 바꾸기 — 지금 ${THEMES[theme].label}`);
+    }
+    const pill = $('#themePill');
+    if (pill) pill.textContent = THEMES[theme].label;
+    U.$$('#themeOptions .theme-option').forEach((b) => {
+      const on = b.dataset.theme === theme;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
   }
 
   function renderBadge() {
@@ -124,13 +173,14 @@
       bar.innerHTML = MEALS.map((t) => {
         const v = totals.byType[t];
         if (!v) return '';
-        return `<span class="dist__seg" style="width:${(v / totals.kcal * 100).toFixed(2)}%;background:${MEAL_COLORS[t]}"></span>`;
+        return `<span class="dist__seg" style="width:${(v / totals.kcal * 100).toFixed(2)}%;background:${mealColor(t)}"></span>`;
       }).join('');
       legend.innerHTML = MEALS.map((t) => `
-        <li><span class="swatch" style="background:${MEAL_COLORS[t]}"></span>${LABEL[t]}
+        <li><span class="swatch" style="background:${mealColor(t)}"></span>${LABEL[t]}
           <b style="color:var(--ink-3);font-weight:700">${U.num(totals.byType[t])}</b></li>`).join('');
     }
 
+    renderDayNote(day);
     renderMeals(day, totals);
     renderWeight(day, date);
     renderFavorites();
@@ -183,8 +233,8 @@
           </span>
           <span class="meal-row__kcal">${U.num(m.kcal)}</span>
           <span class="meal-row__actions">
-            <button class="mini-btn" data-act="edit" data-id="${m.id}" aria-label="수정" title="수정">${PENCIL}</button>
-            <button class="mini-btn mini-btn--danger" data-act="delete" data-id="${m.id}" aria-label="삭제" title="삭제">${TRASH}</button>
+            <button class="row-btn" type="button" data-act="edit" data-id="${m.id}" aria-label="${U.esc(m.name)} 수정" title="수정">${PENCIL}<span>수정</span></button>
+            <button class="row-btn row-btn--danger" type="button" data-act="delete" data-id="${m.id}" aria-label="${U.esc(m.name)} 삭제" title="삭제">${TRASH}<span>삭제</span></button>
           </span>
         </div>`).join('');
 
@@ -201,6 +251,184 @@
           </div>
         </section>`;
     }).join('');
+  }
+
+  function renderDayNote(day) {
+    const host = $('#dayNoteStrip');
+    if (!host) return;
+    if (!day.dayNote) {
+      host.hidden = true;
+      host.innerHTML = '';
+      return;
+    }
+    host.hidden = false;
+    host.innerHTML = `
+      <span class="day-note-strip__label">메모</span>
+      <span class="day-note-strip__text">${U.esc(day.dayNote)}</span>
+      <button class="day-note-strip__btn" type="button" id="btnGoMemo">수정</button>`;
+    const go = $('#btnGoMemo');
+    if (go) go.addEventListener('click', () => switchTab('memo'));
+  }
+
+  /** 삭제는 바로 반영하고, 토스트의 '되돌리기'로 되살릴 수 있게 한다 */
+  function deleteMeal(date, id) {
+    const day = Store.viewDay(date);
+    const meal = day.meals.find((m) => m.id === id);
+    if (!meal) return false;
+    const snapshot = JSON.parse(JSON.stringify(meal));
+    Store.removeMeal(date, id);
+    U.toastAction(`'${snapshot.name}' 기록을 삭제했어요`, {
+      action: '되돌리기',
+      onAction: () => {
+        Store.restoreMeal(date, snapshot);
+        U.toast(`'${snapshot.name}' 기록을 되살렸어요`);
+      },
+    });
+    return true;
+  }
+
+  /* ---------------------------------------------------------------- memo */
+
+  function renderMemo() {
+    const date = state.date;
+    const day = Store.viewDay(date);
+    const today = U.todayISO();
+
+    const label = $('#memoDateLabel');
+    label.innerHTML = `${U.fmtLong(date)}${date === today ? '<span class="today-tag">오늘</span>' : date > today ? '<span class="today-tag future-tag">예정</span>' : ''}`;
+    const foodNotes = day.meals.filter((m) => m.note).length;
+    const memoDay = Store.totals(date);
+    $('#memoDateSub').textContent = memoDay.meals
+      ? `${memoDay.meals}개 기록 · ${U.num(memoDay.kcal)} kcal${foodNotes ? ` · 음식 메모 ${foodNotes}개` : ''}`
+      : (foodNotes ? `음식 메모 ${foodNotes}개` : '이 날은 아직 기록이 없어요');
+    const todayBtn = $('#btnMemoToday');
+    todayBtn.disabled = date === today;
+    todayBtn.style.opacity = date === today ? '.45' : '1';
+
+    // 입력 중인 글을 지키고, 날짜가 바뀌거나 저장했을 때만 새 값으로 채운다
+    const input = $('#memoInput');
+    if (state.memoLoadedDate !== date || !state.memoDirty) {
+      input.value = day.dayNote || '';
+      state.memoLoadedDate = date;
+      state.memoDirty = false;
+    }
+    updateMemoMeta();
+    renderMemoFeed();
+  }
+
+  function updateMemoMeta() {
+    const input = $('#memoInput');
+    const len = input.value.length;
+    const counter = $('#memoCount');
+    counter.textContent = `${U.num(len)} / 1,000`;
+    counter.classList.toggle('is-over', len > 900);
+
+    const meta = $('#memoSavedState');
+    const day = Store.viewDay(state.date);
+    if (state.memoDirty) {
+      meta.textContent = '저장하지 않은 변경';
+      meta.style.color = 'var(--amber-600)';
+    } else {
+      meta.textContent = day.dayNote ? `저장됨 · ${U.fmtStamp(day.dayNoteUpdatedAt || day.updatedAt)}` : '아직 메모가 없어요';
+      meta.style.color = '';
+    }
+  }
+
+  /** 일일 메모 + 음식 메모를 최신 날짜순으로 모은다 */
+  function memoEntries() {
+    const out = [];
+    const days = Store.state.days;
+    Object.keys(days).forEach((date) => {
+      const d = days[date];
+      if (d.dayNote) {
+        out.push({ kind: 'day', date, text: d.dayNote, at: d.dayNoteUpdatedAt || d.updatedAt || 0 });
+      }
+      d.meals.forEach((m) => {
+        if (m.note) out.push({ kind: 'food', date, text: m.note, at: m.updatedAt || m.createdAt || 0, meal: m });
+      });
+    });
+    out.sort((a, b) => (a.date === b.date ? b.at - a.at : (a.date < b.date ? 1 : -1)));
+    return out;
+  }
+
+  function memoMark(text, q) {
+    const raw = String(text || '');
+    if (!q) return U.esc(raw);
+    const i = raw.toLowerCase().indexOf(q);
+    if (i < 0) return U.esc(raw);
+    return `${U.esc(raw.slice(0, i))}<mark class="memo-mark">${U.esc(raw.slice(i, i + q.length))}</mark>${U.esc(raw.slice(i + q.length))}`;
+  }
+
+  function memoItemHTML(e, q) {
+    if (e.kind === 'day') {
+      return `<button type="button" class="memo-item" data-memo-kind="day" data-date="${e.date}">
+        <span class="memo-item__top">
+          <span class="memo-badge memo-badge--day">일일 메모</span>
+          <span class="memo-item__meta">${U.fmtStamp(e.at)}</span>
+        </span>
+        <span class="memo-item__text">${memoMark(e.text, q)}</span>
+      </button>`;
+    }
+    return `<button type="button" class="memo-item" data-memo-kind="food" data-date="${e.date}" data-meal-id="${e.meal.id}">
+      <span class="memo-item__top">
+        <span class="memo-badge">${LABEL[e.meal.type]} 메모</span>
+        <span class="memo-item__meta">${U.fmtStamp(e.at)}</span>
+      </span>
+      <span class="memo-item__food">${U.esc(e.meal.name)} · ${U.num(e.meal.kcal)} kcal</span>
+      <span class="memo-item__text">${memoMark(e.text, q)}</span>
+    </button>`;
+  }
+
+  function renderMemoFeed() {
+    const host = $('#memoTimeline');
+    const all = memoEntries();
+    const q = state.memoSearch.trim().toLowerCase();
+    let list = all;
+    if (state.memoFilter !== 'all') list = list.filter((e) => e.kind === state.memoFilter);
+    if (q) {
+      list = list.filter((e) => ((e.text || '') + ' ' + (e.meal ? e.meal.name : '')).toLowerCase().indexOf(q) >= 0);
+    }
+
+    const count = $('#memoFeedCount');
+    count.textContent = all.length ? `${U.num(list.length)} / ${U.num(all.length)}개` : '메모 없음';
+
+    if (!list.length) {
+      const searching = !!(q || state.memoFilter !== 'all');
+      host.innerHTML = `<div class="memo-empty">
+        <strong>${searching ? '조건에 맞는 메모가 없어요' : '아직 모아 볼 메모가 없어요'}</strong>
+        <p>${searching ? '다른 낱말로 찾아보거나 전체로 바꿔 보세요.' : '일일 메모를 저장하거나 음식에 메모를 남기면<br>여기에 날짜순으로 쌓입니다.'}</p>
+      </div>`;
+      return;
+    }
+
+    const groups = [];
+    list.forEach((e) => {
+      const last = groups[groups.length - 1];
+      if (last && last.date === e.date) last.items.push(e);
+      else groups.push({ date: e.date, items: [e] });
+    });
+
+    const today = U.todayISO();
+    host.innerHTML = groups.map((g) => `
+      <section class="memo-day">
+        <div class="memo-day__head">
+          <span class="memo-day__date">${U.fmtLong(g.date)}</span>
+          ${g.date === today ? '<span class="today-tag">오늘</span>' : ''}
+          <span class="memo-day__count">${g.items.length}개</span>
+        </div>
+        ${g.items.map((e) => memoItemHTML(e, q)).join('')}
+      </section>`).join('');
+  }
+
+  function saveMemo(opts) {
+    const o = opts || {};
+    const input = $('#memoInput');
+    const date = state.date;
+    state.memoDirty = false;
+    const note = Store.setDayNote(date, input.value);
+    input.value = note;
+    updateMemoMeta();
+    if (!o.silent) U.toast(note ? '메모를 저장했어요' : '메모를 지웠어요');
   }
 
   function renderWeight(day, date) {
@@ -348,6 +576,7 @@
         <button class="btn btn--soft btn--sm" id="btnEditDay" type="button">이 날짜 편집</button>
       </div>
       <div class="day-preview__list">${rows}</div>
+      ${day.dayNote ? `<p class="day-preview__note">${U.esc(day.dayNote)}</p>` : ''}
       ${photos.length ? `<div class="day-preview__imgs">${photos.map((m) => `<img src="${m.photo}" alt="${U.esc(m.name)} 사진" data-photo="${m.photo}" />`).join('')}</div>` : ''}`;
 
     const editBtn = $('#btnEditDay');
@@ -554,6 +783,206 @@
     document.body.style.overflow = '';
   }
 
+  /* ------------------------------------------- 음식 사전 · 인분 조절 */
+
+  const FOOD_DB = (typeof window.FoodDB !== 'undefined') ? window.FoodDB : null;
+  const suggestControllers = [];
+
+  /** '1공기 210g' · '10개 150g' · '1/2개 100g' → { base, unit } */
+  function servingUnit(food) {
+    const m = /^(\d+(?:\.\d+)?)\s*(?:\/\s*(\d+(?:\.\d+)?))?\s*([가-힣]+)/.exec(String((food && food.serving) || ''));
+    if (!m) return null;
+    let base = Number(m[1]);
+    if (m[2]) base = base / Number(m[2]);
+    return { base, unit: m[3] };
+  }
+
+  function numText(n) {
+    return String(Math.round(n * 100) / 100);
+  }
+
+  /** 기록에 남길 이름 — 예: 1.5배 → '현미밥 1.5공기', '방울토마토 15개' */
+  function foodName(food, mult) {
+    if (!food) return '';
+    if (!mult || mult === 1) return food.name;
+    const u = servingUnit(food);
+    if (u) {
+      const count = u.base * mult;
+      if (Math.abs(count * 2 - Math.round(count * 2)) < 1e-9) {
+        return `${food.name} ${numText(count)}${u.unit}`.slice(0, 60);
+      }
+    }
+    return `${food.name} ${numText(mult)}인분`.slice(0, 60);
+  }
+
+  function renderPortion() {
+    const box = $('#portionField');
+    if (!box) return;
+    const pick = state.mealPick;
+    box.hidden = !pick;
+    if (!pick) return;
+    $('#portionBase').textContent = `${pick.food.serving} · ${U.num(pick.food.kcal)} kcal 기준`;
+    U.$$('#portionRow .portion-chip').forEach((chip) => {
+      const on = Number(chip.dataset.mult) === pick.mult;
+      chip.classList.toggle('is-active', on);
+      chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+
+  function selectFood(food) {
+    if (!food) return;
+    state.mealPick = { food, mult: 1, autoName: true };
+    $('#mealName').value = food.name;
+    $('#mealKcal').value = String(food.kcal);
+    renderPortion();
+  }
+
+  function applyPortion(mult) {
+    const pick = state.mealPick;
+    if (!pick || !Number.isFinite(mult)) return;
+    pick.mult = mult;
+    const kcalEl = $('#mealKcal');
+    kcalEl.value = String(Math.round(pick.food.kcal * mult));
+    if (pick.autoName) $('#mealName').value = foodName(pick.food, mult);
+    kcalEl.classList.remove('is-bump');
+    void kcalEl.offsetWidth;
+    kcalEl.classList.add('is-bump');
+    renderPortion();
+  }
+
+  function highlight(text, query) {
+    const q = String(query || '').trim();
+    if (!q) return U.esc(text);
+    const i = text.toLowerCase().indexOf(q.toLowerCase());
+    if (i < 0) return U.esc(text);
+    return U.esc(text.slice(0, i)) + '<mark>' + U.esc(text.slice(i, i + q.length)) + '</mark>' + U.esc(text.slice(i + q.length));
+  }
+
+  function attachFoodSuggest(inputId, listId, onPick) {
+    const input = document.getElementById(inputId);
+    const list = document.getElementById(listId);
+    if (!input || !list || !FOOD_DB) return;
+    let items = [];
+    let active = -1;
+    let skipNextFocus = false;
+
+    function close() {
+      items = [];
+      active = -1;
+      list.hidden = true;
+      list.innerHTML = '';
+      input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
+    }
+
+    function paint(q) {
+      const wasHidden = list.hidden;
+      list.innerHTML = items.map((f, i) => `
+        <li class="suggest__item${i === active ? ' is-active' : ''}" id="${listId}-${i}" role="option"
+            aria-selected="${i === active}" data-idx="${i}">
+          <span class="suggest__text">
+            <span class="suggest__name">${highlight(f.name, q)}</span>
+            <span class="suggest__serving">${U.esc(f.serving)}</span>
+          </span>
+          <span class="suggest__kcal">${U.num(f.kcal)}<small>kcal</small></span>
+        </li>`).join('');
+      list.hidden = false;
+      fit();
+      if (wasHidden) {
+        // 처음 열릴 때만 살짝 떠오르게 한다 ( 글자를 칠 때마다 깜박이지 않도록 )
+        list.classList.remove('is-enter');
+        void list.offsetWidth;
+        list.classList.add('is-enter');
+      }
+      input.setAttribute('aria-expanded', 'true');
+      if (active >= 0) input.setAttribute('aria-activedescendant', `${listId}-${active}`);
+      else input.removeAttribute('aria-activedescendant');
+    }
+
+    /** 모달 패널·화면 안에 들어오도록 목록 높이를 맞추고, 아래가 좁으면 위로 띄운다 */
+    function fit() {
+      const r = input.getBoundingClientRect();
+      const panel = input.closest('.modal__panel');
+      const p = panel ? panel.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+      const limit = Math.min(p.bottom, window.innerHeight);
+      const below = limit - r.bottom - 16;
+      const above = r.top - Math.max(p.top, 0) - 16;
+      const up = below < 132 && above > below;
+      const h = Math.min(292, Math.max(96, up ? above : below));
+      list.classList.toggle('suggest--up', up);
+      list.style.maxHeight = `${Math.round(h)}px`;
+    }
+
+    window.addEventListener('resize', () => { if (!list.hidden) fit(); });
+
+    function update() {
+      const q = input.value.trim();
+      if (!q) { close(); return; }
+      items = FOOD_DB.search(q, 8);
+      active = -1;
+      if (!items.length) {
+        list.innerHTML = '<li class="suggest__none" role="presentation">사전에 없는 음식이에요. 그대로 저장하면 됩니다.</li>';
+        list.hidden = false;
+        fit();
+        input.setAttribute('aria-expanded', 'true');
+        return;
+      }
+      paint(q);
+    }
+
+    function choose(f) {
+      if (!f) return;
+      onPick(f);
+      close();
+      input.blur();
+    }
+
+    input.addEventListener('input', update);
+    input.addEventListener('focus', () => {
+      // 수정 모달을 열며 값을 채운 경우엔 추천 목록을 자동으로 띄우지 않는다
+      if (skipNextFocus) { skipNextFocus = false; return; }
+      if (input.value.trim()) update();
+    });
+    input.addEventListener('blur', () => {
+      setTimeout(() => { if (document.activeElement !== input) close(); }, 120);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (list.hidden || !items.length) return;
+        e.preventDefault();
+        active = (active + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+        paint(input.value.trim());
+        const el = list.querySelector('.suggest__item.is-active');
+        if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      if (e.key === 'Enter') {
+        if (!list.hidden && items.length) {
+          e.preventDefault();
+          choose(items[active >= 0 ? active : 0]);
+        }
+        return;
+      }
+      if (e.key === 'Escape' && !list.hidden) {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+      }
+    });
+    list.addEventListener('mousedown', (e) => e.preventDefault());
+    list.addEventListener('click', (e) => {
+      const li = e.target.closest('.suggest__item');
+      if (!li) return;
+      choose(items[Number(li.dataset.idx)]);
+    });
+
+    suggestControllers.push({ close, armSkip() { skipNextFocus = true; } });
+  }
+
+  function closeAllSuggests() {
+    suggestControllers.forEach((c) => c.close());
+  }
+
   /* ----------------------------------------------------------- meal modal */
 
   function openMealModal(opts) {
@@ -561,6 +990,9 @@
     const date = o.date || state.date;
     state.meal = { id: o.id || null, type: o.type || defaultMealType(), date };
     state.photo = null;
+    state.mealPick = null;
+    closeAllSuggests();
+    renderPortion();
 
     const modal = $('#mealModal');
     $('#mealModalTitle').textContent = o.id ? '음식 수정' : '음식 추가';
@@ -573,6 +1005,11 @@
       $('#mealName').value = meal.name;
       $('#mealKcal').value = meal.kcal;
       $('#mealNote').value = meal.note || '';
+      // 사전에 있는 음식이고 칼로리가 기준값과 같다면 인분 조절을 이어서 쓸 수 있게 한다
+      const match = FOOD_DB && FOOD_DB.byName(meal.name);
+      if (match && match.kcal === meal.kcal) {
+        state.mealPick = { food: match, mult: 1, autoName: true };
+      }
       state.photo = meal.photo || null;
       state.meal.type = meal.type;
     } else {
@@ -587,6 +1024,9 @@
       b.classList.toggle('is-active', b.dataset.meal === state.meal.type);
     });
     renderPhotoPreview();
+    renderPortion();
+    closeAllSuggests();
+    suggestControllers.forEach((c) => { if (c.armSkip) c.armSkip(); });
     openModal('mealModal');
   }
 
@@ -628,15 +1068,18 @@
     }
     if (tab === 'stats') renderStats();
     if (tab === 'record') renderRecord();
+    if (tab === 'memo') renderMemo();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function shiftDate(n) {
+    if (state.tab === 'memo' && state.memoDirty) saveMemo({ silent: true });
     state.date = U.addDays(state.date, n);
     const d = U.parseISO(state.date);
     state.calMonth = { y: d.getFullYear(), m: d.getMonth() };
     state.calSelected = state.date;
-    renderRecord();
+    if (state.tab === 'memo') { state.memoLoadedDate = null; renderMemo(); }
+    else renderRecord();
   }
 
   function openLightbox(src) {
@@ -674,13 +1117,7 @@
       }
       if (act === 'delete') {
         e.stopPropagation();
-        const day = Store.viewDay(state.date);
-        const meal = day.meals.find((m) => m.id === actBtn.dataset.id);
-        if (!meal) return;
-        if (window.confirm(`'${meal.name}' 기록을 삭제할까요?`)) {
-          Store.removeMeal(state.date, meal.id);
-          U.toast('기록을 삭제했어요');
-        }
+        deleteMeal(state.date, actBtn.dataset.id);
         return;
       }
       if (act === 'photo') {
@@ -707,6 +1144,29 @@
         state.meal.type = btn.dataset.meal;
         U.$$('#mealTypeSeg .segmented__item').forEach((b) => b.classList.toggle('is-active', b === btn));
       });
+    });
+
+    // 음식 사전 자동완성 (음식 추가/수정)
+    attachFoodSuggest('mealName', 'mealSuggest', (food) => selectFood(food));
+
+    // 이름을 직접 고치면 인분 배수는 칼로리 계산에만 쓰고 이름은 건드리지 않는다.
+    // 고른 음식과 전혀 다른 이름으로 바뀌면 인분 조절을 감춘다(기준이 헷갈리지 않게).
+    $('#mealName').addEventListener('input', () => {
+      const pick = state.mealPick;
+      if (!pick) return;
+      pick.autoName = false;
+      const text = $('#mealName').value.trim();
+      if (!text || text.indexOf(pick.food.name) !== 0) {
+        state.mealPick = null;
+        renderPortion();
+      }
+    });
+
+    // 인분 칩
+    $('#portionRow').addEventListener('click', (e) => {
+      const chip = e.target.closest('.portion-chip');
+      if (!chip) return;
+      applyPortion(Number(chip.dataset.mult));
     });
 
     // 사진
@@ -757,11 +1217,10 @@
 
     $('#btnMealDelete').addEventListener('click', () => {
       if (!state.meal || !state.meal.id) return;
-      if (window.confirm('이 기록을 삭제할까요?')) {
-        Store.removeMeal(state.meal.date, state.meal.id);
-        closeModal('mealModal');
-        U.toast('기록을 삭제했어요');
-      }
+      const date = state.meal.date;
+      const id = state.meal.id;
+      closeModal('mealModal');
+      deleteMeal(date, id);
     });
 
     // 몸무게
@@ -831,6 +1290,95 @@
           U.toast('즐겨찾기에서 뺐어요');
         }
       }
+    });
+
+    // 메모 탭
+    $('#btnMemoPrevDay').addEventListener('click', () => shiftDate(-1));
+    $('#btnMemoNextDay').addEventListener('click', () => shiftDate(1));
+    $('#btnMemoToday').addEventListener('click', () => {
+      if (state.memoDirty) saveMemo({ silent: true });
+      state.date = U.todayISO();
+      state.calSelected = state.date;
+      const d = U.parseISO(state.date);
+      state.calMonth = { y: d.getFullYear(), m: d.getMonth() };
+      state.memoLoadedDate = null;
+      renderMemo();
+    });
+    $('#memoInput').addEventListener('input', () => {
+      state.memoDirty = true;
+      updateMemoMeta();
+    });
+    $('#memoInput').addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        saveMemo();
+      }
+    });
+    $('#btnMemoSave').addEventListener('click', () => saveMemo());
+    $('#btnMemoClear').addEventListener('click', () => {
+      const date = state.date;
+      const day = Store.viewDay(date);
+      const prev = day.dayNote || $('#memoInput').value;
+      if (!String(prev).trim()) { U.toast('지울 메모가 없어요'); return; }
+      state.memoDirty = false;
+      Store.clearDayNote(date);
+      $('#memoInput').value = '';
+      updateMemoMeta();
+      U.toastAction('메모를 지웠어요', {
+        action: '되돌리기',
+        onAction: () => {
+          Store.setDayNote(date, prev);
+          if (state.date === date) { state.memoLoadedDate = null; renderMemo(); }
+          U.toast('메모를 되돌렸어요');
+        },
+      });
+    });
+    $('#memoFilter').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-filter]');
+      if (!b) return;
+      state.memoFilter = b.dataset.filter;
+      U.$$('#memoFilter .segmented__item').forEach((x) => x.classList.toggle('is-active', x === b));
+      renderMemoFeed();
+    });
+    $('#memoSearch').addEventListener('input', (e) => {
+      state.memoSearch = e.target.value || '';
+      renderMemoFeed();
+    });
+    $('#memoTimeline').addEventListener('click', (e) => {
+      const item = e.target.closest('.memo-item');
+      if (!item) return;
+      const date = item.dataset.date;
+      if (item.dataset.memoKind === 'food') {
+        state.date = date;
+        switchTab('record');
+        openMealModal({ id: item.dataset.mealId, date });
+        return;
+      }
+      if (state.memoDirty && state.date !== date) saveMemo({ silent: true });
+      state.date = date;
+      state.calSelected = date;
+      const d = U.parseISO(date);
+      state.calMonth = { y: d.getFullYear(), m: d.getMonth() };
+      state.memoLoadedDate = null;
+      state.memoDirty = false;
+      renderMemo();
+      const input = $('#memoInput');
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+
+    // 테마
+    $('#btnThemeQuick').addEventListener('click', () => {
+      const next = THEME_ORDER[(THEME_ORDER.indexOf(Store.theme()) + 1) % THEME_ORDER.length];
+      Store.setTheme(next);
+      U.toast(`배경 테마: ${THEMES[next].label}`);
+    });
+    $('#themeOptions').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-theme]');
+      if (!b || !THEMES[b.dataset.theme]) return;
+      if (Store.theme() === b.dataset.theme) return;
+      Store.setTheme(b.dataset.theme);
+      U.toast(`배경 테마를 ${THEMES[b.dataset.theme].label}로 바꿨어요`);
     });
 
     // 목표
@@ -1136,6 +1684,12 @@
 
     bind();
 
+    // 설정 화면의 사전 권수를 실제 데이터에 맞춘다
+    if (FOOD_DB) {
+      const meta = document.querySelector('.app-meta');
+      if (meta) meta.textContent = `식사일지 v1.2.1 · 한국 음식 칼로리 사전 ${FOOD_DB.count}종 · 화이트/카키/네이비 테마 · 로컬 저장 + Firebase 선택 동기화`;
+    }
+
     Store.subscribe((s, change) => {
       render(change);
     });
@@ -1148,6 +1702,7 @@
     // 로컬 변경 → Firebase 업로드
     Store.onChange = (change) => {
       if (!Sync.isSignedIn()) return;
+      if (change.source === 'remote') return;
       if (change.type === 'day') Sync.queueDay(change.date);
       if (change.type === 'favorites') Sync.pushFavorites();
       if (change.type === 'settings') Sync.pushSettings();
@@ -1156,7 +1711,7 @@
     render();
     // PWA 바로가기(?tab=stats) 지원
     const wanted = new URLSearchParams(location.search).get('tab');
-    if (wanted && ['record', 'calendar', 'stats'].includes(wanted) && wanted !== 'record') {
+    if (wanted && ['record', 'calendar', 'stats', 'memo'].includes(wanted) && wanted !== 'record') {
       switchTab(wanted);
     }
     Sync.boot();
