@@ -1,7 +1,10 @@
 /* ==========================================================================
    chart.js — 직접 그리는 SVG 선 그래프
    · 이중 Y축(칼로리/몸무게) 또는 따로 보기
-   · 모든 꼭짓점에 실제 수치 라벨. 라벨끼리·다른 선의 점과 겹치면 자동으로 밀어낸다.
+   · 점을 x 위치(ratio)로 배치한다. 주간은 칸 가운데, 월간·연간은 날짜 간격 비율.
+   · 꼭짓점 수치 라벨은 점이 많으면 간격을 벌려(자동 stride) 겹치지 않게 하고,
+     선택한 점·최고·최저는 항상 남긴다. 라벨끼리 부딪히면 자동으로 비켜 놓는다.
+   · 점을 가리키면 툴팁, 누르면 opts.onPick 으로 그날 정보를 넘긴다.
    ========================================================================== */
 (function (global) {
   'use strict';
@@ -42,33 +45,41 @@
     return !(a.x2 < b.x1 || a.x1 > b.x2 || a.y2 < b.y1 || a.y1 > b.y2);
   }
 
+  /** 툴팁·정보 패널용 짧은 메모 */
+  function brief(text, max) {
+    const s = String(text || '').replace(/\s+/g, ' ').trim();
+    return s.length > max ? s.slice(0, max - 1) + '…' : s;
+  }
+
   /**
    * 장애물(다른 시리즈의 점·이미 놓인 라벨)을 피해 라벨 자리를 고른다.
-   * 세로로만 밀면 선이 교차하는 날 두 라벨이 겹치므로, 좌우로도 조금씩 비켜 본다.
+   * 위아래로 조금씩, 그리고 좌우로도 살짝 비켜 본다. 자리가 없으면 null —
+   * 점에서 멀리 떨어진 라벨보다는 라벨을 생략하는 편이 깔끔하다.
    * 반환값 { x, y } — 그릴 좌표.
    */
   function placeLabel(boxes, cx, baseY, w, h, dir, bounds) {
-    const vy = dir === 'up' ? [-13, -24, -36, -48, -60, -72, -84] : [19, 31, 43, 55, 67, 79, 91];
+    const near = dir === 'up'
+      ? [-13, -24, 19, -36, 31, -48, 43, -60]
+      : [19, 31, -13, 43, -24, 55, -36, 67];
     const nudge = Math.min(9, w / 3);
     const dxs = [0, -nudge, nudge, -nudge * 2, nudge * 2];
     const lo = bounds ? bounds.x1 : -Infinity;
     const hi = bounds ? bounds.x2 : Infinity;
-    const cands = [];
-    vy.forEach((dy, i) => dxs.forEach((dx, j) => cands.push({ dx, dy, cost: i * 5 + j })));
-    cands.sort((a, b) => a.cost - b.cost);
-    for (const c of cands) {
-      const x = Math.min(hi, Math.max(lo, cx + c.dx));
-      const y = baseY + c.dy;
-      const box = { x1: x - w / 2 - 2, x2: x + w / 2 + 2, y1: y - h / 2 - 1, y2: y + h / 2 + 1 };
-      if (!boxes.some((b) => overlaps(b, box))) {
-        boxes.push(box);
-        return { x, y };
+    const top = bounds && bounds.y1 != null ? bounds.y1 : -Infinity;
+    const bottom = bounds && bounds.y2 != null ? bounds.y2 : Infinity;
+    for (const dy of near) {
+      for (const dx of dxs) {
+        const x = Math.min(hi, Math.max(lo, cx + dx));
+        const y = baseY + dy;
+        if (y - h / 2 < top || y + h / 2 > bottom) continue;
+        const box = { x1: x - w / 2 - 2, x2: x + w / 2 + 2, y1: y - h / 2 - 1, y2: y + h / 2 + 1 };
+        if (!boxes.some((b) => overlaps(b, box))) {
+          boxes.push(box);
+          return { x, y };
+        }
       }
     }
-    const dy = vy[vy.length - 1];
-    const x = Math.min(hi, Math.max(lo, cx));
-    boxes.push({ x1: x - w / 2, x2: x + w / 2, y1: baseY + dy - h / 2, y2: baseY + dy + h / 2 });
-    return { x, y: baseY + dy };
+    return null;
   }
 
   function pointBox(p, r) {
@@ -102,22 +113,25 @@
 
   const Chart = {
     render(container, opts) {
-      const points = opts.points || [];
-      const mode = opts.mode === 'split' ? 'split' : 'together';
-      const goal = Number(opts.goal) || 2000;
+      const o = opts || {};
+      const points = o.points || [];
+      const mode = o.mode === 'split' ? 'split' : 'together';
+      const goal = Number(o.goal) || 2000;
+      const roomy = !!o.roomy;
       container.innerHTML = '';
       if (!points.length) return;
       const th = themeColors();
 
-      const width = Math.max(300, Math.round(container.clientWidth || 720));
+      const width = Math.max(roomy ? 520 : 280, Math.round(o.width || container.clientWidth || 720));
       const isNarrow = width < 520;
-      const gap = isNarrow ? 26 : 36;
-      const togetherH = isNarrow ? 250 : 300;
-      const splitH = isNarrow ? 168 : 186;
+      const gap = isNarrow ? 28 : roomy ? 46 : 36;
+      const togetherH = roomy ? (isNarrow ? 300 : 410) : (isNarrow ? 250 : 300);
+      const splitH = roomy ? (isNarrow ? 200 : 250) : (isNarrow ? 168 : 186);
 
       const totalH = mode === 'together' ? togetherH : splitH * 2 + gap;
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       svg.setAttribute('viewBox', `0 0 ${width} ${totalH}`);
+      svg.setAttribute('width', String(width));
       svg.setAttribute('height', String(totalH));
       svg.setAttribute('role', 'img');
       svg.setAttribute('aria-label', '칼로리와 몸무게 변화 그래프');
@@ -153,36 +167,53 @@
       const padR = mode === 'together' && hasWeight ? (isNarrow ? 40 : 46) : 16;
       const plotW = width - padL - padR;
       const n = points.length;
-      const slot = plotW / Math.max(1, n);
-      const xOf = (i) => padL + slot * (i + 0.5);
+      const ratioOf = (i) => {
+        const r = points[i] && points[i].ratio;
+        if (Number.isFinite(r)) return U.clamp(r, 0, 1);
+        return n === 1 ? 0.5 : (i + 0.5) / n;
+      };
+      const xOf = (i) => padL + ratioOf(i) * plotW;
+      const selectedIdx = o.selected ? points.findIndex((p) => p.date === o.selected) : -1;
 
+      const panelCtx = {
+        points, width, goal, kcalScale, weightScale: wScale, hasKcal, hasWeight,
+        isNarrow, padL, padR, plotW, xOf, th, selectedIdx, roomy,
+      };
       panels.forEach((panel) => {
-        markup += this._panelMarkup({
-          panel, points, width, height: panel.height, goal, kcalScale, weightScale: wScale,
-          hasKcal, hasWeight, isNarrow, padL, padR, plotW, slot, xOf, th,
-        });
+        markup += this._panelMarkup(Object.assign({ panel }, panelCtx, { height: panel.height }));
       });
 
-      // x축 라벨 (마지막 패널 기준)
       const last = panels[panels.length - 1];
       const baseY = last.top + last.height - 24;
-      markup += `<g>`;
-      points.forEach((p, i) => {
-        const show = n <= 8 || i % 2 === 0 || i === n - 1;
-        if (!show) return;
-        markup += `<text x="${xOf(i).toFixed(1)}" y="${baseY + 15}" text-anchor="middle"
-          font-size="${isNarrow ? 10 : 11}" font-weight="400" fill="${th.axis}">${U.esc(p.label)}</text>`;
-      });
-      markup += `</g>`;
 
-      // 호버 영역
-      markup += `<g class="chart-hit">`;
-      points.forEach((p, i) => {
-        markup += `<rect x="${(xOf(i) - slot / 2).toFixed(1)}" y="${panels[0].top}" width="${slot.toFixed(1)}"
-          height="${(last.top + last.height - panels[0].top).toFixed(1)}" fill="transparent"
-          data-i="${i}" style="cursor:crosshair"/>`;
+      // 세로 구분선 (연간 그래프의 월 경계 등)
+      (o.dividers || []).forEach((d) => {
+        const x = padL + U.clamp(d.ratio, 0, 1) * plotW;
+        markup += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${(panels[0].top + 20).toFixed(1)}"
+          y2="${baseY.toFixed(1)}" stroke="${th.grid}" stroke-width="1" stroke-dasharray="2 5"/>`;
       });
-      markup += `</g>`;
+
+      // x축 라벨 — 점이 스스로 tick 여부를 정한다 (월간: 5일 간격, 연간: 매월 1일)
+      markup += '<g class="chart-x">';
+      points.forEach((p, i) => {
+        if (p.tick === false) return;
+        const text = p.tickText != null && p.tickText !== '' ? p.tickText : p.label;
+        markup += `<text x="${xOf(i).toFixed(1)}" y="${(baseY + 15).toFixed(1)}" text-anchor="middle"
+          font-size="${isNarrow ? 10 : 11}" font-weight="400" fill="${th.axis}">${U.esc(text)}</text>`;
+      });
+      markup += '</g>';
+
+      // 가리키기·누르기 영역 (이웃 점과의 중간을 경계로 나눈다)
+      markup += '<g class="chart-hit">';
+      points.forEach((p, i) => {
+        const left = i === 0 ? padL : (xOf(i - 1) + xOf(i)) / 2;
+        const right = i === n - 1 ? padL + plotW : (xOf(i) + xOf(i + 1)) / 2;
+        const w = Math.max(4, right - left);
+        markup += `<rect x="${left.toFixed(1)}" y="${panels[0].top}" width="${w.toFixed(1)}"
+          height="${(last.top + last.height - panels[0].top).toFixed(1)}" fill="transparent"
+          data-i="${i}" style="cursor:pointer"/>`;
+      });
+      markup += '</g>';
 
       svg.innerHTML = markup;
       container.appendChild(svg);
@@ -196,6 +227,7 @@
       guide.setAttribute('stroke-width', '1');
       guide.setAttribute('stroke-dasharray', '3 4');
       guide.style.opacity = '0';
+      guide.style.pointerEvents = 'none';
       svg.appendChild(guide);
 
       const showTip = (i) => {
@@ -204,13 +236,29 @@
         const x = xOf(i);
         guide.setAttribute('x1', x); guide.setAttribute('x2', x);
         guide.setAttribute('y1', panels[0].top + 10);
-        guide.setAttribute('y2', last.top + last.height - 24);
+        guide.setAttribute('y2', baseY);
         guide.style.opacity = '1';
-        tip.innerHTML = `<b>${U.esc(p.full || p.label)}</b><br>
-          <span class="chart-tip__kcal">칼로리 ${p.kcal == null ? '기록 없음' : U.num(p.kcal) + ' kcal'}</span><br>
-          <span class="chart-tip__weight">몸무게 ${p.weight == null ? '기록 없음' : U.kg(p.weight)}</span>`;
-        tip.style.left = U.clamp(x, 74, width - 74) + 'px';
-        tip.style.top = (panels[0].top + 30) + 'px';
+        const diff = p.kcal == null ? null : p.kcal - goal;
+        const diffText = diff == null ? ''
+          : diff === 0 ? ' · 목표와 같음'
+            : diff > 0 ? ` · 목표 +${U.num(diff)} kcal` : ` · 목표 −${U.num(-diff)} kcal`;
+        tip.innerHTML = `<b>${U.esc(p.full || p.label)}</b>
+          <span class="chart-tip__kcal">섭취 ${p.kcal == null ? '기록 없음' : U.num(p.kcal) + ' kcal' + diffText}</span>
+          <span class="chart-tip__weight">몸무게 ${p.weight == null ? '기록 없음' : U.kg(p.weight) + ' kg'}</span>
+          ${p.note ? `<span class="chart-tip__note">메모 ${U.esc(brief(p.note, 34))}</span>` : ''}
+          <span class="chart-tip__hint">눌러서 그날 기록 보기</span>`;
+        tip.style.left = U.clamp(x, 88, width - 88) + 'px';
+        // 툴팁은 그 점 바로 위에 — 위/아래 끝을 넘지 않게
+        const p0 = panels[0];
+        const pt = p0.top + 25;
+        const pb = p0.top + p0.height - 24;
+        const ph = pb - pt;
+        const scale = Number.isFinite(p.kcal) ? kcalScale : Number.isFinite(p.weight) ? wScale : null;
+        const value = Number.isFinite(p.kcal) ? p.kcal : p.weight;
+        const yAt = scale && Number.isFinite(value)
+          ? pt + ph - ((value - scale.min) / (scale.max - scale.min || 1)) * ph
+          : pb;
+        tip.style.top = U.clamp(yAt - 14, 106, pb) + 'px';
         tip.classList.add('is-on');
       };
       const hideTip = () => {
@@ -221,21 +269,27 @@
         r.addEventListener('pointerenter', () => showTip(Number(r.dataset.i)));
         r.addEventListener('pointerdown', () => showTip(Number(r.dataset.i)));
         r.addEventListener('pointerleave', hideTip);
+        r.addEventListener('click', () => {
+          hideTip();
+          if (typeof o.onPick === 'function') o.onPick(Number(r.dataset.i), points[Number(r.dataset.i)]);
+        });
       });
       svg.addEventListener('pointerleave', hideTip);
+      // 다시 그린 뒤 포인터가 남아 있어도 툴팁이 차트를 가리지 않도록, 누를 때는 숨긴다
+      svg.addEventListener('pointerup', () => hideTip());
     },
 
     _panelMarkup(ctx) {
       const { panel, points, width, height, goal, kcalScale, weightScale: wScale,
-        hasKcal, hasWeight, isNarrow, padL, padR, plotW, slot, xOf, th } = ctx;
+        hasKcal, hasWeight, isNarrow, padL, padR, plotW, xOf, th, selectedIdx } = ctx;
 
       const top = panel.top + 25;
       const bottom = panel.top + height - 24;
       const plotH = bottom - top;
       const scaleFor = (v, scale) => top + plotH - ((v - scale.min) / (scale.max - scale.min || 1)) * plotH;
 
-      const kcalPts = points.map((p, i) => (Number.isFinite(p.kcal) ? { x: xOf(i), y: scaleFor(p.kcal, kcalScale), v: p.kcal } : null));
-      const weightPts = points.map((p, i) => (Number.isFinite(p.weight) ? { x: xOf(i), y: scaleFor(p.weight, wScale), v: p.weight } : null));
+      const kcalPts = points.map((p, i) => (Number.isFinite(p.kcal) ? { x: xOf(i), y: scaleFor(p.kcal, kcalScale), v: p.kcal, i } : null));
+      const weightPts = points.map((p, i) => (Number.isFinite(p.weight) ? { x: xOf(i), y: scaleFor(p.weight, wScale), v: p.weight, i } : null));
 
       let out = `<g class="chart-panel" data-panel="${panel.key}">`;
 
@@ -262,20 +316,64 @@
           fill="${th.weightText}" letter-spacing="-.01em">몸무게 <tspan fill="${th.weightAxis}" font-weight="400">kg</tspan></text>`;
       }
 
+      // 두 시리즈가 같은 '이미 놓인 라벨' 목록을 나눠 쓴다(선이 교차해도 라벨이 겹치지 않게).
+      const placeBoxes = kcalPts.filter(Boolean).map((pt) => pointBox(pt, 7))
+        .concat(weightPts.filter(Boolean).map((pt) => pointBox(pt, 7)));
+      // 패널 제목(칼로리 kcal / 몸무게 kg)도 수치 라벨이 덮지 않도록 장애물로 둔다
+      if (panel.key === 'kcal' || panel.key === 'weight') {
+        const title = panel.key === 'kcal' ? '칼로리 kcal' : '몸무게 kg';
+        placeBoxes.push({ x1: padL - 2, x2: padL + textWidth(title, 11.5) + 4, y1: panel.top + 1, y2: panel.top + 18 });
+      }
+
       // 목표선
       if (panel.yKcal && hasKcal) {
         const gy = scaleFor(goal, kcalScale);
         if (gy >= top - 1 && gy <= bottom + 1) {
           out += `<line x1="${padL}" x2="${width - padR}" y1="${gy.toFixed(1)}" y2="${gy.toFixed(1)}"
             stroke="${th.goal}" stroke-width="1.3" stroke-dasharray="5 5"/>`;
-          out += `<text x="${padL + 4}" y="${(gy - 6).toFixed(1)}" text-anchor="start" font-size="10.5"
-            font-weight="500" fill="${th.goalText}">목표 ${U.num(goal)}</text>`;
+          if (!isNarrow) {
+            const goalLabel = `목표 ${U.num(goal)}`;
+            const gw = textWidth(goalLabel, 10.5);
+            out += `<text x="${padL + 4}" y="${(gy - 6).toFixed(1)}" text-anchor="start" font-size="10.5"
+              font-weight="500" fill="${th.goalText}">${U.esc(goalLabel)}</text>`;
+            // 수치 라벨이 목표선 글자를 덮지 않도록 장애물로 등록
+            placeBoxes.push({ x1: padL, x2: padL + 8 + gw, y1: gy - 17, y2: gy - 1 });
+          }
         }
       }
 
-      // 두 시리즈가 같은 '이미 놓인 라벨' 목록을 나눠 쓴다(선이 교차해도 라벨이 겹치지 않게).
-      const placeBoxes = kcalPts.filter(Boolean).map((pt) => pointBox(pt, 7))
-        .concat(weightPts.filter(Boolean).map((pt) => pointBox(pt, 7)));
+      const fs = isNarrow ? 9.5 : 10.5;
+      const labelW = textWidth('8,888', fs) + 9;
+      const pitch = points.length > 1 ? plotW / (points.length - 1) : plotW;
+      const labels = [];
+
+
+      /** 라벨을 붙일 점 고르기 — x 간격을 지키며 고르고, 첫·끝·최고·최저·고른 날은 자리가 나면 함께 남긴다 */
+      const pickLabels = (valid) => {
+        if (!valid.length) return [];
+        const gapPx = Math.max(isNarrow ? 42 : 30, labelW + 2);
+        const keep = [];
+        let lastX = -1e9;
+        valid.forEach((pt) => {
+          if (pt.x - lastX >= gapPx) { keep.push(pt); lastX = pt.x; }
+        });
+        if (valid.length && keep[0] !== valid[0]) keep.unshift(valid[0]);
+        const tail = valid[valid.length - 1];
+        if (keep[keep.length - 1] !== tail) keep.push(tail);
+        let hi = valid[0], lo = valid[0];
+        valid.forEach((pt) => { if (pt.v > hi.v) hi = pt; if (pt.v < lo.v) lo = pt; });
+        const extras = [hi, lo];
+        if (selectedIdx >= 0) {
+          const sel = valid.find((pt) => pt.i === selectedIdx);
+          if (sel) extras.push(sel);
+        }
+        extras.forEach((pt) => {
+          if (keep.includes(pt)) return;
+          if (keep.some((k) => Math.abs(k.x - pt.x) < gapPx * 0.7)) return;
+          keep.push(pt);
+        });
+        return keep.sort((a, b) => a.x - b.x);
+      };
 
       const drawSeries = (pts, color, scale, gradId, dir, labelColor, obstacles, kind) => {
         const valid = pts.filter(Boolean);
@@ -296,42 +394,51 @@
         }
 
         let d = '', pen = false;
+        const bridges = [];
+        let prevPt = null;
         pts.forEach((pt) => {
           if (!pt) { pen = false; return; }
+          if (!pen && prevPt) bridges.push([prevPt, pt]);
           d += `${pen ? 'L' : 'M'}${pt.x.toFixed(1)} ${pt.y.toFixed(1)} `;
           pen = true;
+          prevPt = pt;
+        });
+        // 기록이 빠진 날을 건너는 부분은 점선으로만 이어 흐름을 보여 준다 (값을 채워 넣지 않음)
+        bridges.forEach(([a, b]) => {
+          out += `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"
+            stroke="${color}" stroke-width="1.3" stroke-dasharray="2 4" stroke-opacity=".55" stroke-linecap="round"/>`;
         });
         if (d) {
           out += `<path d="${d}" fill="none" stroke="${color}" stroke-width="2.4"
             stroke-linejoin="round" stroke-linecap="round"/>`;
         }
 
+        // 점이 아주 촘촘하면(연간 365일) 점은 생략하고 선만 그려 뭉개지지 않게 한다
+        const dense = valid.length > 1 && pitch < 6;
+        const r = dense ? 2.4 : 4.2;
         valid.forEach((pt) => {
-          out += `<circle cx="${pt.x.toFixed(1)}" cy="${pt.y.toFixed(1)}" r="4.2" fill="${th.surface}"
-            stroke="${color}" stroke-width="2.4"/>`;
+          const isSel = pt.i === selectedIdx;
+          if (dense && !isSel) return;
+          if (isSel) {
+            out += `<circle cx="${pt.x.toFixed(1)}" cy="${pt.y.toFixed(1)}" r="${(r + 5).toFixed(1)}"
+              fill="${color}" fill-opacity=".16" stroke="none"/>`;
+          }
+          out += `<circle cx="${pt.x.toFixed(1)}" cy="${pt.y.toFixed(1)}" r="${isSel ? r + 1.4 : r}" fill="${th.surface}"
+            stroke="${color}" stroke-width="${isSel ? 2.8 : 2.2}"/>`;
         });
 
-        // 수치 라벨 — 다른 시리즈의 점과 이미 놓인 라벨을 장애물로 삼는다.
-        // 배경 사각형을 먼저 모두 깔고 글자를 그 위에 얹어, 라벨끼리 겹쳐도 글자가 가려지지 않게 한다.
-        const labelBoxes = [];
-        valid.forEach((pt) => {
+        // 라벨 자리는 여기서만 계산해 두고, 두 시리즈를 모두 그린 뒤 맨 위에 얹는다
+        // (나중에 그린 점이 먼저 놓인 라벨을 가리는 일이 없게).
+        const chosen = pickLabels(valid);
+        chosen.forEach((pt) => {
           const label = labelText(pt.v, kind || 'kcal');
-          // 좁은 화면은 한 칸이 40px 남짓이라 라벨을 조금 작게 잡아 서로 비켜 앉을 자리를 남긴다.
-          const fs = isNarrow ? 9.5 : 10.5;
           const w = textWidth(label, fs);
           const h = fs + 2;
-          const at = placeLabel(placeBoxes, pt.x, pt.y, w, h, dir, { x1: padL + w / 2, x2: width - padR - w / 2 });
-          labelBoxes.push({ x: at.x, y: at.y, w, h, fs, label });
-        });
-        labelBoxes.forEach((b) => {
-          out += `<rect x="${(b.x - b.w / 2 - 2.5).toFixed(1)}" y="${(b.y - b.h / 2 - 0.5).toFixed(1)}"
-            width="${(b.w + 5).toFixed(1)}" height="${(b.h + 1).toFixed(1)}" rx="4"
-            fill="${th.surface}" fill-opacity=".96"/>`;
-        });
-        labelBoxes.forEach((b) => {
-          out += `<text x="${b.x.toFixed(1)}" y="${(b.y + b.fs * 0.34).toFixed(1)}" text-anchor="middle"
-            font-size="${b.fs}" font-weight="500" fill="${labelColor}"
-            style="font-variant-numeric:tabular-nums">${U.esc(b.label)}</text>`;
+          const at = placeLabel(placeBoxes, pt.x, pt.y, w, h, dir, {
+            x1: padL + w / 2, x2: width - padR - w / 2, y1: panel.top + 2, y2: bottom + 12,
+          });
+          if (!at) return;   // 자리가 없으면 생략
+          labels.push({ x: at.x, y: at.y, w, h, fs, label, color: labelColor, strong: pt.i === selectedIdx });
         });
       };
 
@@ -344,6 +451,18 @@
         drawSeries(weightPts, th.weight, wScale, panel.key === 'weight' ? 'weightArea' : null,
           panel.yKcal ? 'down' : 'up', th.weightText, kcalPts.filter(Boolean), 'weight');
       }
+
+      // 수치 라벨 — 배경을 먼저 모두 깔고 글자를 그 위에 얹는다(라벨끼리 겹쳐도 글자가 가려지지 않게).
+      labels.forEach((b) => {
+        out += `<rect x="${(b.x - b.w / 2 - 2.5).toFixed(1)}" y="${(b.y - b.h / 2 - 0.5).toFixed(1)}"
+          width="${(b.w + 5).toFixed(1)}" height="${(b.h + 1).toFixed(1)}" rx="4"
+          fill="${th.surface}" fill-opacity=".96"/>`;
+      });
+      labels.forEach((b) => {
+        out += `<text x="${b.x.toFixed(1)}" y="${(b.y + b.fs * 0.34).toFixed(1)}" text-anchor="middle"
+          font-size="${b.fs}" font-weight="${b.strong ? 600 : 500}" fill="${b.color}"
+          style="font-variant-numeric:tabular-nums">${U.esc(b.label)}</text>`;
+      });
 
       // 오른쪽 몸무게 축 (함께 보기)
       if (panel.yWeight && panel.yKcal) {

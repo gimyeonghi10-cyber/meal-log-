@@ -47,6 +47,7 @@
     statsRange: 'week',
     statsAnchor: U.todayISO(),
     chartMode: 'together',
+    statsPick: null,         // 그래프에서 골라 정보를 보고 있는 날짜
     meal: null,              // 편집 중인 음식 {id,type,date}
     mealPick: null,          // 사전에서 고른 음식 {food, mult, autoName}
     photo: null,
@@ -209,6 +210,7 @@
       if (iso === date) cls.push('is-selected');
       return `<button type="button" class="${cls.join(' ')}" data-date="${iso}"
         aria-label="${U.fmtLong(iso)} ${empty ? '기록 없음' : U.num(t.kcal) + '킬로칼로리'}">
+        <span class="week-bar__kcal${empty ? ' is-empty' : ''}">${empty ? '–' : U.num(t.kcal)}</span>
         <span class="week-bar__track"><span class="week-bar__fill" style="height:${h}%"></span></span>
         <span class="week-bar__label">${U.WEEKDAYS[U.parseISO(iso).getDay()]}</span>
       </button>`;
@@ -492,7 +494,8 @@
     const today = U.todayISO();
     const goal = Store.goal();
 
-    $('#calTitle').textContent = `${y}년 ${m + 1}월`;
+    $('#calTitleText').textContent = `${y}년 ${m + 1}월`;
+    $('#calTitle').setAttribute('aria-label', `${y}년 ${m + 1}월 — 연도·월 빠른 선택`);
 
     let cells = '';
     for (let i = 0; i < 42; i++) {
@@ -623,63 +626,70 @@
     // 일 단위 집계
     const daily = days.map((iso) => {
       const t = Store.totals(iso);
-      return { date: iso, kcal: t.kcal || null, weight: t.weight, meals: t.meals };
+      const day = Store.viewDay(iso);
+      return { date: iso, kcal: t.kcal || null, weight: t.weight, meals: t.meals, note: day.dayNote || '' };
     });
 
     let points = [];
+    const dividers = [];
+    const nDays = days.length;
+
     if (range === 'week') {
-      points = daily.map((d) => ({
+      points = daily.map((d, i) => ({
+        date: d.date,
         label: U.fmtShort(d.date),
         full: U.fmtLong(d.date),
         short: `${U.fmtShort(d.date)} (${U.WEEKDAYS[U.parseISO(d.date).getDay()]})`,
+        tick: true,
+        ratio: (i + 0.5) / Math.max(1, nDays),
         kcal: d.kcal,
         weight: d.weight,
         count: d.meals,
+        note: d.note,
       }));
     } else if (range === 'month') {
-      // 달력 주(일요일 시작) 단위로 묶어 평균
-      const weeks = [];
-      let cur = new Date(U.parseISO(start));
-      cur.setDate(cur.getDate() - cur.getDay());
-      while (U.iso(cur) <= end) {
-        const wStart = U.iso(cur);
-        const wEnd = U.addDays(wStart, 6);
-        const s = wStart < start ? start : wStart;
-        const e = wEnd > end ? end : wEnd;
-        const inRange = Store.datesBetween(s, e).map((iso) => daily.find((x) => x.date === iso)).filter(Boolean);
-        const kcalVals = inRange.filter((x) => x.kcal).map((x) => x.kcal);
-        const weightVals = inRange.filter((x) => x.weight != null).map((x) => x.weight);
-        weeks.push({
-          label: U.fmtShort(s),
-          full: `${U.fmtShort(s)} ~ ${U.fmtShort(e)} 평균`,
-          short: `${U.fmtShort(s)}~${U.fmtShort(e)}`,
-          kcal: kcalVals.length ? Math.round(kcalVals.reduce((a, b) => a + b, 0) / kcalVals.length) : null,
-          weight: weightVals.length ? Math.round((weightVals.reduce((a, b) => a + b, 0) / weightVals.length) * 10) / 10 : null,
-          count: inRange.filter((x) => x.meals).length,
-          daysIn: inRange.length,
-        });
-        const next = new Date(cur);
-        next.setDate(next.getDate() + 7);
-        cur = next;
-      }
-      points = weeks;
-    } else {
-      points = Array.from({ length: 12 }, (_, i) => {
-        const mStart = U.iso(new Date(U.parseISO(start).getFullYear(), i, 1));
-        const mEnd = U.iso(new Date(U.parseISO(start).getFullYear(), i + 1, 0));
-        const inRange = daily.filter((x) => x.date >= mStart && x.date <= mEnd);
-        const kcalVals = inRange.filter((x) => x.kcal).map((x) => x.kcal);
-        const weightVals = inRange.filter((x) => x.weight != null).map((x) => x.weight);
+      // 1일부터 말일까지 — 하루하루의 기록을 그대로 이어 본다 (빈 날은 선을 끊는다)
+      const mo = Number(start.slice(5, 7));
+      points = daily.map((d, i) => {
+        const day = i + 1;
         return {
-          label: `${i + 1}월`,
-          full: `${mStart.slice(0, 4)}년 ${i + 1}월 평균`,
-          short: `${i + 1}월`,
-          kcal: kcalVals.length ? Math.round(kcalVals.reduce((a, b) => a + b, 0) / kcalVals.length) : null,
-          weight: weightVals.length ? Math.round((weightVals.reduce((a, b) => a + b, 0) / weightVals.length) * 10) / 10 : null,
-          count: inRange.filter((x) => x.meals).length,
-          daysIn: inRange.length,
+          date: d.date,
+          label: String(day),
+          tickText: String(day),
+          tick: day === 1 || day % 5 === 0 || day === nDays,
+          full: U.fmtFull(d.date),
+          short: `${mo}/${day}`,
+          ratio: nDays > 1 ? (day - 1) / (nDays - 1) : 0.5,
+          kcal: d.kcal,
+          weight: d.weight,
+          count: d.meals,
+          note: d.note,
         };
       });
+    } else {
+      // 1월 1일 ~ 12월 31일 하루 단위 + 월 구분선
+      points = daily.map((d, i) => {
+        const dt = U.parseISO(d.date);
+        const dom = dt.getDate();
+        const monthStart = dom === 1;
+        return {
+          date: d.date,
+          label: String(dom),
+          tickText: monthStart ? `${dt.getMonth() + 1}월` : '',
+          tick: monthStart,
+          full: U.fmtFull(d.date),
+          short: `${dt.getMonth() + 1}/${dom}`,
+          ratio: nDays > 1 ? i / (nDays - 1) : 0.5,
+          kcal: d.kcal,
+          weight: d.weight,
+          count: d.meals,
+          note: d.note,
+        };
+      });
+      for (let m = 1; m < 12; m++) {
+        const idx = days.indexOf(U.iso(new Date(Number(start.slice(0, 4)), m, 1)));
+        if (idx > 0) dividers.push({ ratio: idx / (nDays - 1) });
+      }
     }
 
     // 요약 수치 (일 단위 기준)
@@ -690,7 +700,118 @@
     const weights = daily.filter((d) => d.weight != null);
     const weightChange = weights.length > 1 ? Math.round((weights[weights.length - 1].weight - weights[0].weight) * 10) / 10 : null;
 
-    return { range, start, end, goal, daily, points, recordedDays, kcalDays, avgKcal, okDays, weights, weightChange };
+    return { range, start, end, goal, daily, points, dividers, recordedDays, kcalDays, avgKcal, okDays, weights, weightChange };
+  }
+
+  /** 기간을 한 줄로 — '월간 · 2026년 11월' */
+  function periodCaption(s) {
+    const { range, start, end } = s;
+    if (range === 'week') return `주간 · ${U.fmtShort(start)} – ${U.fmtShort(end)}`;
+    if (range === 'month') return `월간 · ${start.slice(0, 4)}년 ${Number(start.slice(5, 7))}월`;
+    return `연간 · ${start.slice(0, 4)}년`;
+  }
+
+  /** 그래프를 그린다 — 일반 카드 / 크게 보기(roomy) 두 곳에서 같은 데이터를 쓴다 */
+  function renderStatsChart(s, roomy) {
+    const host = roomy ? $('#chartAreaRoomy') : $('#chartArea');
+    if (!host) return;
+    const hasAny = s.points.some((p) => p.kcal != null || p.weight != null);
+    if (!hasAny) {
+      host.style.width = '';
+      host.innerHTML = `<div class="chart-empty"><strong style="color:var(--ink-2)">이 기간에는 기록이 없어요</strong><span>음식과 몸무게를 기록하면 그래프가 그려집니다.</span></div>`;
+      return;
+    }
+    let width = 0;
+    if (roomy) {
+      // 좁은 화면에서는 넓은 캔버스를 만들어 가로로 넘겨 보게 한다
+      const wrap = host.parentElement;
+      const avail = Math.max(320, (wrap ? wrap.clientWidth : 0) - 2);
+      width = avail < 700 ? 720 : avail;
+      host.style.width = width + 'px';
+    } else {
+      host.style.width = '';
+    }
+    Chart.render(host, {
+      points: s.points,
+      mode: state.chartMode,
+      goal: s.goal,
+      dividers: s.dividers,
+      selected: state.statsPick,
+      roomy,
+      width: width || undefined,
+      onPick: (i, p) => pickStatsDay(p.date),
+    });
+  }
+
+  /** 그래프에서 고른 날 — 정보 패널 */
+  function chartDetailHTML(p, s) {
+    const goal = s.goal;
+    const diff = p.kcal == null ? null : p.kcal - goal;
+    const diffText = diff == null ? '—' : diff === 0 ? '목표와 같음' : `${diff > 0 ? '+' : '−'}${U.num(Math.abs(diff))} kcal`;
+    const diffCls = diff == null ? '' : diff > 0 ? 'is-over' : 'is-under';
+    const dow = U.WEEKDAYS[U.parseISO(p.date).getDay()];
+    return `
+      <div class="chart-detail__head">
+        <strong class="chart-detail__date">${U.fmtFull(p.date)} (${dow})</strong>
+        ${p.kcal == null ? '<span class="tag tag--none">기록 없음</span>'
+          : p.kcal <= goal ? '<span class="tag tag--ok">목표 이내</span>' : '<span class="tag tag--over">목표 초과</span>'}
+        <span class="spacer"></span>
+        <button class="btn btn--primary btn--sm" type="button" data-goto-day="${p.date}">그날 기록 보기</button>
+      </div>
+      <div class="chart-detail__stats">
+        <div class="chart-detail__cell"><span>섭취</span><b>${p.kcal == null ? '—' : `${U.num(p.kcal)}<small>kcal</small>`}</b></div>
+        <div class="chart-detail__cell"><span>목표 대비</span><b class="${diffCls}">${diffText}</b></div>
+        <div class="chart-detail__cell"><span>몸무게</span><b>${p.weight == null ? '—' : `${U.kg(p.weight)}<small>kg</small>`}</b></div>
+        <div class="chart-detail__cell"><span>기록</span><b>${p.count ? `${p.count}<small>개</small>` : '—'}</b></div>
+      </div>
+      ${p.note
+        ? `<p class="chart-detail__memo"><span>메모</span>${U.esc(p.note)}</p>`
+        : '<p class="chart-detail__memo is-empty">이 날 남긴 메모가 없어요.</p>'}`;
+  }
+
+  function renderChartDetail(host, s, date) {
+    if (!host) return;
+    const p = date ? s.points.find((x) => x.date === date) : null;
+    if (!p) {
+      host.hidden = false;
+      host.classList.add('is-hint');
+      host.innerHTML = '<span class="chart-detail__hint">그래프의 점을 누르면 그날의 섭취 칼로리·목표 대비·몸무게·메모가 여기에 보여요.</span>';
+      return;
+    }
+    host.hidden = false;
+    host.classList.remove('is-hint');
+    host.innerHTML = chartDetailHTML(p, s);
+    host.querySelectorAll('[data-goto-day]').forEach((b) => {
+      b.addEventListener('click', () => goToDay(b.dataset.gotoDay));
+    });
+  }
+
+  function pickStatsDay(date) {
+    if (!date) return;
+    state.statsPick = state.statsPick === date ? null : date;
+    renderStats();
+  }
+
+  /** 그래프 크게 보기 — 같은 데이터, 넓은 화면 */
+  function renderChartModal(s) {
+    const data = s || buildStats();
+    const period = $('#chartModalPeriod');
+    if (period) period.textContent = periodCaption(data);
+    renderStatsChart(data, true);
+    renderChartDetail($('#chartDetailRoomy'), data, state.statsPick);
+  }
+
+  function openChartModal() {
+    openModal('chartModal');
+    renderChartModal();
+  }
+
+  function syncChartModeSegs() {
+    U.$$('[data-mode]').forEach((b) => {
+      const on = b.dataset.mode === state.chartMode;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
   }
 
   function renderStats() {
@@ -703,12 +824,13 @@
       : range === 'month'
         ? `${start.slice(0, 4)}년 ${Number(start.slice(5, 7))}월`
         : `${start.slice(0, 4)}년`;
-    $('#statsRangeLabel').textContent = label;
+    $('#statsRangeText').textContent = label;
+    $('#statsRangeLabel').setAttribute('aria-label', `${label} — 연도·월 빠른 선택`);
     $('#chartSub').textContent = range === 'week'
       ? `일별 기록 · ${U.fmtFull(start)} – ${U.fmtFull(end)}`
       : range === 'month'
-        ? '주별 평균 · 한 주의 기록을 평균 내어 표시합니다'
-        : '월별 평균 · 그 달 기록의 평균을 표시합니다';
+        ? `일별 기록 · 1일부터 말일까지 · 점을 눌러 그날 상태를 확인하세요`
+        : `일별 추이 · 월 구분선과 함께 기록이 있는 날을 이어 봅니다`;
 
     // 요약 카드
     const change = s.weightChange;
@@ -732,19 +854,25 @@
         <span class="stat-card__sub">${s.kcalDays.length ? `달성률 ${Math.round((s.okDays / s.kcalDays.length) * 100)}%` : '기록이 없어요'}</span>
       </article>`;
 
-    // 그래프
-    const area = $('#chartArea');
-    const hasAny = s.points.some((p) => p.kcal != null || p.weight != null);
-    if (!hasAny) {
-      area.innerHTML = `<div class="chart-empty"><strong style="color:var(--ink-2)">이 기간에는 기록이 없어요</strong><span>음식과 몸무게를 기록하면 그래프가 그려집니다.</span></div>`;
-    } else {
-      Chart.render(area, { points: s.points, mode: state.chartMode, goal: s.goal });
-    }
+    // 그래프 + 고른 날 정보
+    renderStatsChart(s, false);
+    renderChartDetail($('#chartDetail'), s, state.statsPick);
+    syncChartModeSegs();
+    if (!$('#chartModal').hidden) renderChartModal(s);
 
-    // 표
+    // 표 — 주간·월간은 날짜별, 연간은 기록이 있는 날만 (365줄은 너무 길어서)
     const tbody = $('#dataTable tbody');
-    $('#tableMeta').textContent = range === 'week' ? '일별' : range === 'month' ? '주별 평균' : '월별 평균';
-    tbody.innerHTML = s.points.map((p) => {
+    const rows = range === 'year'
+      ? s.points.filter((p) => p.kcal != null || p.weight != null || (p.note || '').trim())
+      : s.points;
+    $('#tableMeta').textContent = range === 'week' ? '일별'
+      : range === 'month' ? '일별'
+        : rows.length ? `기록한 날 ${rows.length}일` : '기록 없음';
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="is-muted" style="text-align:center;padding:22px 0">이 기간에는 기록이 없어요</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map((p) => {
       const okTag = p.kcal == null ? '<span class="tag tag--none">기록 없음</span>'
         : p.kcal <= s.goal ? '<span class="tag tag--ok">이내</span>' : '<span class="tag tag--over">초과</span>';
       return `<tr>
@@ -1088,6 +1216,121 @@
     document.body.style.overflow = 'hidden';
   }
 
+  /** 그래프·달력에서 고른 날을 오늘(기록) 탭으로 연다 */
+  function goToDay(date) {
+    if (!date) return;
+    state.date = date;
+    state.calSelected = date;
+    const d = U.parseISO(date);
+    state.calMonth = { y: d.getFullYear(), m: d.getMonth() };
+    state.memoLoadedDate = null;
+    state.memoDirty = false;
+    closeMonthPicker();
+    closeAllModals();
+    switchTab('record');
+  }
+
+  /* --------------------------------------------------- 연도·월 빠른 선택 */
+
+  const picker = { y: null, m: null, anchor: null, onPick: null };
+
+  /** 기록이 있는 해 + 최근 10년 + 내년 */
+  function pickerYears(currentY) {
+    const nowY = new Date().getFullYear();
+    const set = new Set();
+    for (let y = nowY - 10; y <= nowY + 1; y++) set.add(y);
+    set.add(currentY);
+    Object.keys(Store.state.days).forEach((d) => set.add(Number(d.slice(0, 4))));
+    return Array.from(set).filter((y) => Number.isFinite(y)).sort((a, b) => a - b);
+  }
+
+  function paintPicker() {
+    const years = $('#pickerYears');
+    const months = $('#pickerMonths');
+    if (!years || !months || picker.y == null) return;
+    years.innerHTML = pickerYears(picker.y).map((y) => `<button type="button" class="picker__year${y === picker.y ? ' is-active' : ''}"
+      role="option" aria-selected="${y === picker.y}" data-year="${y}">${y}년</button>`).join('');
+    months.innerHTML = Array.from({ length: 12 }, (_, i) => {
+      const on = i === picker.m;
+      return `<button type="button" class="picker__month${on ? ' is-active' : ''}" data-month="${i}"
+        aria-pressed="${on}" aria-label="${picker.y}년 ${i + 1}월">${i + 1}월</button>`;
+    }).join('');
+    const caption = $('#pickerMonthCaption');
+    if (caption) caption.textContent = `${picker.y}년`;
+    scrollPickerYears();
+  }
+
+  /** 고른 연도가 연도 목록 가운데에 오도록 (보이게 된 뒤에 호출해야 한다) */
+  function scrollPickerYears() {
+    const years = $('#pickerYears');
+    if (!years) return;
+    const active = years.querySelector('.picker__year.is-active');
+    if (!active) return;
+    years.scrollTop = Math.max(0, active.offsetTop - years.clientHeight / 2 + active.offsetHeight / 2);
+  }
+
+  function positionPicker() {
+    const box = $('#monthPicker');
+    const anchor = picker.anchor;
+    if (!box || !anchor || box.hidden) return;
+    const r = anchor.getBoundingClientRect();
+    const bw = Math.min(334, window.innerWidth - 20);
+    box.style.width = bw + 'px';
+    const bh = box.offsetHeight || 252;
+    let left = r.left + r.width / 2 - bw / 2;
+    left = U.clamp(left, 10, Math.max(10, window.innerWidth - bw - 10));
+    let top = r.bottom + 8;
+    if (top + bh > window.innerHeight - 12) top = Math.max(12, r.top - bh - 8);
+    box.style.left = Math.round(left) + 'px';
+    box.style.top = Math.round(top) + 'px';
+  }
+
+  function pickerOutside(e) {
+    const box = $('#monthPicker');
+    if (!box || box.hidden) return;
+    if (box.contains(e.target)) return;
+    if (picker.anchor && picker.anchor.contains(e.target)) return;
+    closeMonthPicker();
+  }
+
+  function pickerScroll(e) {
+    const box = $('#monthPicker');
+    if (!box || box.hidden) return;
+    if (box.contains(e.target)) return;
+    closeMonthPicker();
+  }
+
+  function closeMonthPicker() {
+    const box = $('#monthPicker');
+    if (!box || box.hidden) return;
+    box.hidden = true;
+    if (picker.anchor) picker.anchor.setAttribute('aria-expanded', 'false');
+    picker.anchor = null;
+    picker.onPick = null;
+    document.removeEventListener('pointerdown', pickerOutside, true);
+    window.removeEventListener('scroll', pickerScroll, true);
+    window.removeEventListener('resize', closeMonthPicker);
+  }
+
+  function openMonthPicker(anchor, y, m, onPick) {
+    const box = $('#monthPicker');
+    if (!box || !anchor) return;
+    if (!box.hidden && picker.anchor === anchor) { closeMonthPicker(); return; }
+    closeMonthPicker();
+    picker.y = y;
+    picker.m = m;
+    picker.anchor = anchor;
+    picker.onPick = onPick;
+    paintPicker();
+    box.hidden = false;
+    anchor.setAttribute('aria-expanded', 'true');
+    positionPicker();
+    scrollPickerYears();
+    document.addEventListener('pointerdown', pickerOutside, true);
+    window.addEventListener('scroll', pickerScroll, true);
+    window.addEventListener('resize', closeMonthPicker);
+  }
+
   function bind() {
     // tabs
     U.$$('.nav__item').forEach((btn) => {
@@ -1400,6 +1643,13 @@
     });
 
     // 달력
+    $('#calTitle').addEventListener('click', () => {
+      if (!state.calMonth) return;
+      openMonthPicker($('#calTitle'), state.calMonth.y, state.calMonth.m, (y, m) => {
+        state.calMonth = { y, m };
+        renderCalendar();
+      });
+    });
     $('#btnPrevMonth').addEventListener('click', () => {
       const { y, m } = state.calMonth;
       state.calMonth = m === 0 ? { y: y - 1, m: 11 } : { y, m: m - 1 };
@@ -1431,15 +1681,45 @@
       const b = e.target.closest('[data-range]');
       if (!b) return;
       state.statsRange = b.dataset.range;
+      state.statsPick = null;
       U.$$('#rangeSeg .segmented__item').forEach((x) => x.classList.toggle('is-active', x === b));
       renderStats();
     });
-    $('#chartModeSeg').addEventListener('click', (e) => {
+    // 기간 제목 → 연도·월 빠른 선택 (주간·월간·연간 모두)
+    $('#statsRangeLabel').addEventListener('click', () => {
+      const d = U.parseISO(state.statsAnchor);
+      openMonthPicker($('#statsRangeLabel'), d.getFullYear(), d.getMonth(), (y, m) => {
+        state.statsAnchor = U.iso(new Date(y, m, 1));
+        state.statsPick = null;
+        renderStats();
+      });
+    });
+    // 함께 보기 / 따로 보기 — 일반 카드와 크게 보기 모달의 토글을 함께 움직인다
+    document.addEventListener('click', (e) => {
       const b = e.target.closest('[data-mode]');
       if (!b) return;
-      state.chartMode = b.dataset.mode;
-      U.$$('#chartModeSeg .segmented__item').forEach((x) => x.classList.toggle('is-active', x === b));
+      state.chartMode = b.dataset.mode === 'split' ? 'split' : 'together';
+      syncChartModeSegs();
       renderStats();
+    });
+    $('#btnChartExpand').addEventListener('click', openChartModal);
+    // 연도·월 피커 안에서 고르기
+    $('#pickerYears').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-year]');
+      if (!b) return;
+      picker.y = Number(b.dataset.year);
+      paintPicker();
+      positionPicker();
+      scrollPickerYears();
+    });
+    $('#pickerMonths').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-month]');
+      if (!b) return;
+      const y = picker.y;
+      const m = Number(b.dataset.month);
+      const cb = picker.onPick;
+      closeMonthPicker();
+      if (cb) cb(y, m);
     });
     const shiftPeriod = (dir) => {
       const d = U.parseISO(state.statsAnchor);
@@ -1447,6 +1727,7 @@
       else if (state.statsRange === 'month') d.setMonth(d.getMonth() + dir);
       else d.setFullYear(d.getFullYear() + dir);
       state.statsAnchor = U.iso(d);
+      state.statsPick = null;
       renderStats();
     };
     $('#btnStatsPrev').addEventListener('click', () => shiftPeriod(-1));
@@ -1467,6 +1748,7 @@
     });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        closeMonthPicker();
         closeAllModals();
         if (!$('#lightbox').hidden) { $('#lightbox').hidden = true; document.body.style.overflow = ''; }
       }
@@ -1687,7 +1969,7 @@
     // 설정 화면의 사전 권수를 실제 데이터에 맞춘다
     if (FOOD_DB) {
       const meta = document.querySelector('.app-meta');
-      if (meta) meta.textContent = `식사일지 v1.2.2 · 한국 음식 칼로리 사전 ${FOOD_DB.count}종 · 화이트/카키/네이비 테마 · 로컬 저장 + Firebase 선택 동기화`;
+      if (meta) meta.textContent = `식사일지 v1.3.0 · 한국 음식 칼로리 사전 ${FOOD_DB.count}종 · 화이트/카키/네이비 테마 · 로컬 저장 + Firebase 선택 동기화`;
     }
 
     Store.subscribe((s, change) => {
