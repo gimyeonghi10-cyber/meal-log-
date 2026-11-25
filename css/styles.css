@@ -63,6 +63,7 @@
   --sun: #EF4444;
   --sat: #3B82F6;
   --dashed: #D5DEE9;
+  --scroll-fade: rgba(15, 23, 42, .13);
   --amber-line: #FDE68A;
   --danger-line: #FECACA;
 
@@ -163,6 +164,7 @@ html[data-theme="khaki"] {
   --sun: #C24A3C;
   --sat: #3F6E93;
   --dashed: #CFCBB8;
+  --scroll-fade: rgba(43, 48, 37, .15);
 
   --ico-breakfast-bg: #F6E7C4;
   --ico-breakfast-ink: #8F5C12;
@@ -246,6 +248,7 @@ html[data-theme="navy"] {
   --sun: #F87171;
   --sat: #7FB2F0;
   --dashed: #2C3A54;
+  --scroll-fade: rgba(0, 0, 0, .5);
 
   --ico-breakfast-bg: rgba(251, 191, 36, .16);
   --ico-breakfast-ink: #FCD34D;
@@ -1015,8 +1018,31 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 .delta--up { color: var(--amber-600); }
 .delta--flat { color: var(--muted); }
 
-/* favorites */
-.fav-list { display: flex; flex-direction: column; gap: 2px; }
+/* favorites — 항목이 늘어도 카드가 길어지지 않게 일정 높이에서 스크롤한다 (v1.4) */
+.fav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 268px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dashed) transparent;
+  margin-right: -4px;
+  padding-right: 4px;
+  -webkit-overflow-scrolling: touch;
+}
+.fav-list::-webkit-scrollbar { width: 6px; }
+.fav-list::-webkit-scrollbar-track { background: transparent; }
+.fav-list::-webkit-scrollbar-thumb {
+  background: var(--dashed);
+  border-radius: 999px;
+}
+.fav-list::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+/* 아래에 더 있을 때만 보이는 부드러운 경계 */
+.fav-list.is-scrollable:not(.is-at-end) {
+  box-shadow: inset 0 -16px 14px -16px var(--scroll-fade);
+}
 .fav-row {
   display: flex;
   align-items: center;
@@ -2028,20 +2054,109 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 }
 .chart-detail__memo.is-empty { color: var(--faint); }
 
-/* 그래프 크게 보기 모달 */
-.modal__panel--chart { max-width: min(1100px, 96vw); max-height: calc(100vh - 32px); }
-.chart-modal__body { gap: 10px; }
-.chart-modal__period { margin-left: 2px; }
+/* ==========================================================================
+   그래프 전체화면 (v1.4) — 모달이 아니라 화면 전체를 쓰고,
+   상단 도구줄과 하단 상세만 컴팩트하게 두어 차트에 최대 면적을 준다.
+   ========================================================================== */
+.modal--chart { padding: 0; align-items: stretch; justify-content: stretch; }
+.modal__panel--chart {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--surface);
+}
+@supports (height: 100dvh) {
+  .modal__panel--chart { height: 100dvh; }
+}
+
+.chart-full__bar {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  padding-top: calc(8px + env(safe-area-inset-top, 0px));
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+.chart-full__group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.chart-full__group--nav { flex: 1 1 auto; }
+.chart-full__group--tools { flex: 0 1 auto; margin-left: auto; }
+.chart-full__title {
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -.03em;
+  color: var(--ink);
+  margin-right: 2px;
+  white-space: nowrap;
+}
+.chart-full__period {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: -.01em;
+  cursor: pointer;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  transition: background .15s, border-color .15s;
+}
+.chart-full__period:hover { background: var(--surface-hover); border-color: var(--dashed); }
+.chart-full__close { margin-left: 2px; flex: none; }
+.chart-full__legend { display: flex; align-items: center; gap: 12px; font-size: 12.5px; color: var(--muted); }
+
 .chart-modal__scroll {
-  overflow-x: auto;
-  overflow-y: hidden;
-  margin: 0 -4px;
-  padding: 0 4px 4px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 12px;
   -webkit-overflow-scrolling: touch;
 }
-.chart-wrap--roomy { min-height: 0; }
-.chart-detail--roomy { margin-top: 2px; }
-.chart-modal__hint { color: var(--faint); }
+.chart-wrap--roomy { min-height: 0; margin-top: 0; }
+
+/* 하단 상세 — 데스크톱은 한 줄로 접어 차트 높이를 지킨다 */
+.chart-detail--roomy {
+  flex: none;
+  margin-top: 0;
+  padding: 8px 14px calc(8px + var(--safe-b) * .4);
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+}
+.chart-detail--roomy .chart-detail__head { flex: 0 1 auto; }
+.chart-detail--roomy .chart-detail__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 0;
+}
+.chart-detail--roomy .chart-detail__cell { min-width: 84px; padding: 6px 11px; }
+.chart-detail--roomy .chart-detail__memo {
+  flex: 1 1 220px;
+  min-width: 120px;
+  margin-top: 0;
+  -webkit-line-clamp: 1;
+}
+.chart-detail--roomy .chart-detail__hint { display: inline-block; padding: 2px 0; }
+.chart-detail--roomy.is-hint { margin-top: 0; padding-top: 8px; border-top: 0; }
 
 /* 툴팁 — 여러 줄 정보 */
 .chart-tip { white-space: normal; max-width: min(250px, 72vw); }
@@ -2157,15 +2272,56 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
   .day-preview__head #btnEditDay { order: 2; margin-left: auto; }
   .meal-row__actions { opacity: .8; }
   .quick-chip { min-width: 26px; padding: 0 5px; font-size: 12.5px; }
+  .fav-list { max-height: 236px; }
   /* v1.3 — 그래프 도구줄·정보 패널·크게 보기 */
   .chart-head__tools { width: 100%; justify-content: flex-end; }
   .chart-head__tools .segmented { width: auto; flex: 1; }
   .chart-detail__stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .chart-detail__cell b { font-size: 15px; }
   .chart-detail__head .btn { height: 34px; padding: 0 12px; font-size: 13.5px; }
-  .modal--chart { padding: 0; }
-  .modal__panel--chart { max-width: none; max-height: 94vh; height: 94vh; border-radius: 22px 22px 0 0; }
-  .chart-modal__body { padding: 12px 12px calc(12px + var(--safe-b)); }
+  .modal--chart { padding: 0; align-items: stretch; justify-content: stretch; }
+  .modal__panel--chart {
+    max-width: none;
+    max-height: none;
+    height: 100vh;
+    border-radius: 0;
+    animation: none;
+  }
+  @supports (height: 100dvh) {
+    .modal__panel--chart { height: 100dvh; }
+  }
+  .chart-full__bar { gap: 8px; padding: 8px 10px; padding-top: calc(8px + env(safe-area-inset-top, 0px)); }
+  /* 모바일에서는 제목을 화면에서만 감추고(대화상자의 이름은 유지) */
+  .chart-full__title {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  .chart-full__group--nav { flex: 1 1 auto; padding-right: 46px; }
+  .chart-full__close {
+    position: absolute;
+    top: calc(8px + env(safe-area-inset-top, 0px));
+    right: 10px;
+  }
+  .chart-full__group--tools { flex: 1 1 100%; margin-left: 0; justify-content: space-between; }
+  .chart-full__group--tools .segmented { flex: 1 1 0; }
+  .chart-full__group--tools .segmented__item { flex: 1; text-align: center; padding: 6px 8px; font-size: 13px; }
+  .chart-full__legend { display: none; }
+  .chart-full__period { font-size: 13px; padding: 0 8px; }
+  .chart-modal__scroll { padding: 4px 8px; }
+  .chart-detail--roomy { display: block; padding: 6px 12px calc(10px + var(--safe-b)); }
+  .chart-detail--roomy .chart-detail__head { gap: 6px 8px; }
+  .chart-detail--roomy .chart-detail__date { font-size: 14px; }
+  .chart-detail--roomy .chart-detail__head .btn { height: 30px; padding: 0 10px; font-size: 13px; }
+  .chart-detail--roomy .chart-detail__stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+    margin-top: 4px;
+  }
+  .chart-detail--roomy .chart-detail__cell { padding: 5px 9px; }
+  .chart-detail--roomy .chart-detail__cell span { font-size: 12px; }
+  .chart-detail--roomy .chart-detail__cell b { font-size: 14.5px; }
+  .chart-detail--roomy .chart-detail__memo { margin-top: 4px; -webkit-line-clamp: 1; }
   .cal-head__title { font-size: 18.5px; }
 }
 
