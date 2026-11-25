@@ -469,6 +469,7 @@
     const favs = Store.state.favorites;
     if (!favs.length) {
       host.innerHTML = `<li class="fav-empty">자주 먹는 음식을 저장해 두면<br>탭 한 번으로 오늘 끼니에 담을 수 있어요.</li>`;
+      host.classList.remove('is-scrollable', 'is-at-end');
       return;
     }
     host.innerHTML = favs.map((f) => `
@@ -482,6 +483,16 @@
           <button class="mini-btn" type="button" data-act="fav-del" data-id="${f.id}" aria-label="${U.esc(f.name)} 즐겨찾기에서 삭제" title="삭제">${CLOSE}</button>
         </span>
       </li>`).join('');
+    updateFavScroll();
+  }
+
+  /** 즐겨찾기 목록이 카드 안에서 스크롤되는지 — 넘칠 때만 아래쪽 그림자로 알려 준다 */
+  function updateFavScroll() {
+    const host = $('#favList');
+    if (!host) return;
+    const scrollable = host.scrollHeight - host.clientHeight > 2;
+    host.classList.toggle('is-scrollable', scrollable);
+    host.classList.toggle('is-at-end', !scrollable || host.scrollTop + host.clientHeight >= host.scrollHeight - 2);
   }
 
   /* -------------------------------------------------------------- calendar */
@@ -711,8 +722,8 @@
     return `연간 · ${start.slice(0, 4)}년`;
   }
 
-  /** 그래프를 그린다 — 일반 카드 / 크게 보기(roomy) 두 곳에서 같은 데이터를 쓴다 */
-  function renderStatsChart(s, roomy) {
+  /** 그래프를 그린다 — 일반 카드 / 전체화면 두 곳에서 같은 데이터를 쓴다 */
+  function renderStatsChart(s, roomy, box) {
     const host = roomy ? $('#chartAreaRoomy') : $('#chartArea');
     if (!host) return;
     const hasAny = s.points.some((p) => p.kcal != null || p.weight != null);
@@ -722,11 +733,12 @@
       return;
     }
     let width = 0;
+    let height = 0;
     if (roomy) {
-      // 좁은 화면에서는 넓은 캔버스를 만들어 가로로 넘겨 보게 한다
+      // 전체화면 — 화면이 내주는 폭·높이를 그대로 써서 꽉 채운다
       const wrap = host.parentElement;
-      const avail = Math.max(320, (wrap ? wrap.clientWidth : 0) - 2);
-      width = avail < 700 ? 720 : avail;
+      width = Math.max(300, Math.floor((box && box.width) || (wrap ? wrap.clientWidth - 26 : 320)));
+      height = Math.max(0, Math.floor((box && box.height) || 0));
       host.style.width = width + 'px';
     } else {
       host.style.width = '';
@@ -738,7 +750,9 @@
       dividers: s.dividers,
       selected: state.statsPick,
       roomy,
+      expanded: !!roomy,
       width: width || undefined,
+      height: height || undefined,
       onPick: (i, p) => pickStatsDay(p.date),
     });
   }
@@ -792,13 +806,30 @@
     renderStats();
   }
 
-  /** 그래프 크게 보기 — 같은 데이터, 넓은 화면 */
+  /** 그래프 전체화면 — 남은 화면을 재어 차트가 화면을 꽉 채우게 그린다 */
   function renderChartModal(s) {
     const data = s || buildStats();
-    const period = $('#chartModalPeriod');
+    const period = $('#chartModalPeriodText') || $('#chartModalPeriod');
     if (period) period.textContent = periodCaption(data);
-    renderStatsChart(data, true);
+    syncRangeSegs();
+    // 하단 상세가 먼저 자리를 잡아야 남는 높이를 정확히 잴 수 있다
     renderChartDetail($('#chartDetailRoomy'), data, state.statsPick);
+    renderStatsChart(data, true, chartModalBox());
+  }
+
+  /** 전체화면에서 차트가 쓸 수 있는 폭·높이 (상단 바·하단 상세를 뺀 나머지) */
+  function chartModalBox() {
+    const scroll = $('#chartScroll');
+    if (!scroll) return null;
+    const cs = getComputedStyle(scroll);
+    const pl = parseFloat(cs.paddingLeft) || 0;
+    const pr = parseFloat(cs.paddingRight) || 0;
+    const pt = parseFloat(cs.paddingTop) || 0;
+    const pb = parseFloat(cs.paddingBottom) || 0;
+    return {
+      width: Math.max(280, Math.floor(scroll.clientWidth - pl - pr)),
+      height: Math.max(0, Math.floor(scroll.clientHeight - pt - pb)),
+    };
   }
 
   function openChartModal() {
@@ -812,6 +843,33 @@
       b.classList.toggle('is-active', on);
       b.setAttribute('aria-selected', on ? 'true' : 'false');
     });
+  }
+
+  function syncRangeSegs() {
+    U.$$('[data-range]').forEach((b) => {
+      const on = b.dataset.range === state.statsRange;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+  }
+
+  function setStatsRange(range) {
+    if (!['week', 'month', 'year'].includes(range)) return;
+    state.statsRange = range;
+    state.statsPick = null;
+    syncRangeSegs();
+    renderStats();
+  }
+
+  /** 기간을 이전/다음으로 옮긴다 (통계 탭·전체화면 공통) */
+  function shiftPeriod(dir) {
+    const d = U.parseISO(state.statsAnchor);
+    if (state.statsRange === 'week') d.setDate(d.getDate() + dir * 7);
+    else if (state.statsRange === 'month') d.setMonth(d.getMonth() + dir);
+    else d.setFullYear(d.getFullYear() + dir);
+    state.statsAnchor = U.iso(d);
+    state.statsPick = null;
+    renderStats();
   }
 
   function renderStats() {
@@ -858,6 +916,7 @@
     renderStatsChart(s, false);
     renderChartDetail($('#chartDetail'), s, state.statsPick);
     syncChartModeSegs();
+    syncRangeSegs();
     if (!$('#chartModal').hidden) renderChartModal(s);
 
     // 표 — 주간·월간은 날짜별, 연간은 기록이 있는 날만 (365줄은 너무 길어서)
@@ -1518,6 +1577,8 @@
       renderRecord();
     });
 
+    $('#favList').addEventListener('scroll', updateFavScroll, { passive: true });
+
     $('#favList').addEventListener('click', (e) => {
       const btn = e.target.closest('[data-act]');
       if (!btn) return;
@@ -1680,10 +1741,23 @@
     $('#rangeSeg').addEventListener('click', (e) => {
       const b = e.target.closest('[data-range]');
       if (!b) return;
-      state.statsRange = b.dataset.range;
-      state.statsPick = null;
-      U.$$('#rangeSeg .segmented__item').forEach((x) => x.classList.toggle('is-active', x === b));
-      renderStats();
+      setStatsRange(b.dataset.range);
+    });
+    // 전체화면 안에서도 기간을 바꾸고 앞뒤로 넘길 수 있다
+    $('#fullRangeSeg').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-range]');
+      if (!b) return;
+      setStatsRange(b.dataset.range);
+    });
+    $('#btnFullPrev').addEventListener('click', () => shiftPeriod(-1));
+    $('#btnFullNext').addEventListener('click', () => shiftPeriod(1));
+    $('#chartModalPeriod').addEventListener('click', () => {
+      const d = U.parseISO(state.statsAnchor);
+      openMonthPicker($('#chartModalPeriod'), d.getFullYear(), d.getMonth(), (y, m) => {
+        state.statsAnchor = U.iso(new Date(y, m, 1));
+        state.statsPick = null;
+        renderStats();
+      });
     });
     // 기간 제목 → 연도·월 빠른 선택 (주간·월간·연간 모두)
     $('#statsRangeLabel').addEventListener('click', () => {
@@ -1721,15 +1795,6 @@
       closeMonthPicker();
       if (cb) cb(y, m);
     });
-    const shiftPeriod = (dir) => {
-      const d = U.parseISO(state.statsAnchor);
-      if (state.statsRange === 'week') d.setDate(d.getDate() + dir * 7);
-      else if (state.statsRange === 'month') d.setMonth(d.getMonth() + dir);
-      else d.setFullYear(d.getFullYear() + dir);
-      state.statsAnchor = U.iso(d);
-      state.statsPick = null;
-      renderStats();
-    };
     $('#btnStatsPrev').addEventListener('click', () => shiftPeriod(-1));
     $('#btnStatsNext').addEventListener('click', () => shiftPeriod(1));
 
@@ -1824,17 +1889,19 @@
       if (state.tab === 'stats') renderStats();
       if (state.tab === 'record') {
         Chart.sparkline($('#weightSpark'), Store.weightSeries(14), { height: 44 });
+        updateFavScroll();
       }
     }, 180));
 
-    // 앱이 백그라운드에서 돌아오면 날짜 갱신
+    // 앱이 백그라운드에서 돌아오면 날짜를 다시 확인한다
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
-        const t = U.todayISO();
-        if (state.date === t) renderRecord();
+        checkDayRollover();
         renderBadge();
       }
     });
+    window.addEventListener('focus', () => checkDayRollover());
+    window.addEventListener('pageshow', () => checkDayRollover());
   }
 
   async function connectFirebase() {
@@ -1943,6 +2010,68 @@
       : '아직 백업하지 않았어요.';
   }
 
+  /* -------------------------------------------------------- 날짜 자동 전환 */
+
+  /**
+   * 날짜가 바뀌는 순간(자정)을 스스로 알아채 화면 기준을 새 '오늘'로 옮긴다.
+   * PC에 앱을 켜 둔 채 하루가 지나도 '오늘' 버튼을 누르거나 새로고침할 필요가 없다.
+   */
+  const dayWatch = { lastKnown: U.todayISO(), timer: null };
+
+  function monthOf(iso) {
+    const d = U.parseISO(iso);
+    return { y: d.getFullYear(), m: d.getMonth() };
+  }
+
+  /** 다음 자정 +1초에 확인을 걸어 두고, 지나면 또 다음 자정으로 다시 건다 */
+  function armMidnightCheck() {
+    if (dayWatch.timer) clearTimeout(dayWatch.timer);
+    const now = new Date();
+    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 1, 0);
+    next.setDate(next.getDate() + 1);
+    const wait = Math.max(1000, next.getTime() - now.getTime());
+    dayWatch.timer = setTimeout(() => {
+      checkDayRollover();
+      armMidnightCheck();
+    }, wait);
+  }
+
+  /**
+   * 오늘 날짜가 바뀌었으면 화면을 새 날짜 기준으로 다시 그린다.
+   * · 사용자가 '오늘'(= 바뀌기 전 날짜)을 보고 있었다면 새 오늘로 따라간다.
+   * · 일부러 다른 날짜를 열어 보던 중이면 그 날짜는 그대로 두고,
+   *   달력의 오늘 표시·주간/월간 기준만 새 오늘로 갱신한다.
+   * 반환값: 실제로 날짜가 바뀌었는지
+   */
+  function checkDayRollover() {
+    const nowToday = U.todayISO();
+    const prev = dayWatch.lastKnown;
+    if (nowToday === prev) return false;
+    dayWatch.lastKnown = nowToday;
+
+    const followingToday = state.date === prev;
+    if (followingToday) {
+      if (state.tab === 'memo' && state.memoDirty) saveMemo({ silent: true });
+      state.date = nowToday;
+      state.memoLoadedDate = null;
+      state.memoDirty = false;
+    }
+    // 달력 — 골라 둔 날과 보고 있던 달이 '어제의 오늘' 기준이었으면 새 오늘로
+    if (state.calSelected === prev) state.calSelected = nowToday;
+    if (state.calMonth) {
+      const old = monthOf(prev);
+      if (state.calMonth.y === old.y && state.calMonth.m === old.m) state.calMonth = monthOf(nowToday);
+    }
+    // 통계 — '오늘'이 속한 기간을 보고 있었으면 새 기간으로 넘긴다
+    if (state.statsAnchor === prev) state.statsAnchor = nowToday;
+
+    render();
+    if (followingToday && document.visibilityState === 'visible') {
+      U.toast(`${U.fmtLong(nowToday)}로 날짜가 바뀌었어요`);
+    }
+    return true;
+  }
+
   /* ---------------------------------------------------------------- start */
 
   function registerSW() {
@@ -1966,10 +2095,15 @@
 
     bind();
 
+    // 날짜 자동 전환 — 자정 +1초 예약, 1분마다 확인, 백그라운드 복귀 시 확인
+    dayWatch.lastKnown = t;
+    armMidnightCheck();
+    setInterval(() => checkDayRollover(), 60 * 1000);
+
     // 설정 화면의 사전 권수를 실제 데이터에 맞춘다
     if (FOOD_DB) {
       const meta = document.querySelector('.app-meta');
-      if (meta) meta.textContent = `식사일지 v1.3.0 · 한국 음식 칼로리 사전 ${FOOD_DB.count}종 · 화이트/카키/네이비 테마 · 로컬 저장 + Firebase 선택 동기화`;
+      if (meta) meta.textContent = `식사일지 v1.4.0 · 한국 음식 칼로리 사전 ${FOOD_DB.count}종 · 화이트/카키/네이비 테마 · 로컬 저장 + Firebase 선택 동기화`;
     }
 
     Store.subscribe((s, change) => {
