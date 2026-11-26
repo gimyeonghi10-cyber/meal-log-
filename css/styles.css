@@ -1792,6 +1792,20 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 .sync-state.is-error { color: var(--danger); }
 .sync-state.is-ok { color: var(--mint-600); }
 
+/* 저장된 Firebase 설정 — 입력란에 원문(apiKey) 대신 가림 표시만 보여준다 (v1.4.1) */
+.saved-config {
+  display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap;
+  padding: 10px 12px; border-radius: 12px;
+  background: var(--bg); border: 1px solid var(--line-soft);
+}
+.saved-config__mask { font-size: 15px; letter-spacing: 2.5px; color: var(--ink-2); line-height: 1; }
+.saved-config__note { flex: 1; min-width: 130px; font-size: 13px; color: var(--muted); letter-spacing: -.01em; }
+.saved-config__note #fbSavedProject { color: var(--ink-2); }
+.saved-config .btn { margin-left: auto; }
+
+/* 저장된 설정을 쓰는 동안 구성 입력란은 가림 안내를 보여준다 */
+.textarea.is-masked { color: var(--muted); letter-spacing: .04em; }
+
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .app-meta { margin-top: 8px; color: #B6C2D2; }
 

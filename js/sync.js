@@ -11,12 +11,122 @@
   const SDK_VERSION = '10.12.2';
   const SDK_BASE = `https://www.gstatic.com/firebasejs/${SDK_VERSION}/`;
 
+  // 설정 이중 보관용 IndexedDB (localStorage가 비워져도 되살린다)
+  const VAULT_DB = 'meal-log-vault';
+  const VAULT_STORE = 'kv';
+  const VAULT_KEY = 'firebaseConfig';
+  const VAULT_TIMEOUT = 1500;
+
   function readConfig() {
     try {
       const raw = localStorage.getItem(CFG_KEY);
       return raw ? JSON.parse(raw) : null;
     } catch (e) { return null; }
   }
+
+  /* --------------------------------------------- 설정 보관소 (IndexedDB) */
+
+  function idbSupported() {
+    try { return !!(global.indexedDB); } catch (e) { return false; }
+  }
+
+  /** 응답이 없거나 막힌 환경에서 앱이 멈추지 않도록 시간 제한을 둔다 */
+  function withTimeout(promise) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error('IndexedDB 응답 없음'));
+      }, VAULT_TIMEOUT);
+      promise.then(
+        (value) => { if (settled) return; settled = true; clearTimeout(timer); resolve(value); },
+        (err) => { if (settled) return; settled = true; clearTimeout(timer); reject(err); }
+      );
+    });
+  }
+
+  function openVault() {
+    return new Promise((resolve, reject) => {
+      let req;
+      try { req = indexedDB.open(VAULT_DB, 1); } catch (e) { reject(e); return; }
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        try {
+          if (!db.objectStoreNames.contains(VAULT_STORE)) db.createObjectStore(VAULT_STORE);
+        } catch (e) { /* noop */ }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('IndexedDB를 열지 못했어요.'));
+      req.onblocked = () => reject(new Error('IndexedDB가 차단되었어요.'));
+    });
+  }
+
+  /** 한 트랜잭션을 열어 run(store, done)을 실행하고 끝나면 결과를 돌려준다 */
+  function vaultTx(mode, run) {
+    return new Promise((resolve, reject) => {
+      openVault().then((db) => {
+        let tx;
+        try { tx = db.transaction(VAULT_STORE, mode); } catch (e) {
+          try { db.close(); } catch (_) { /* noop */ }
+          reject(e); return;
+        }
+        let out;
+        const finish = (fn, arg) => {
+          try { db.close(); } catch (e) { /* noop */ }
+          fn(arg);
+        };
+        tx.oncomplete = () => finish(resolve, out);
+        tx.onerror = () => finish(reject, (tx.error || new Error('IndexedDB 트랜잭션 실패')));
+        tx.onabort = () => finish(reject, (tx.error || new Error('IndexedDB 트랜잭션 중단')));
+        try { run(tx.objectStore(VAULT_STORE), (v) => { out = v; }); } catch (e) {
+          try { tx.abort(); } catch (_) { /* noop */ }
+          reject(e);
+        }
+      }, reject);
+    });
+  }
+
+  const Vault = {
+    /** IndexedDB에 남아 있는 설정 (없거나 못 쓰는 환경이면 null) */
+    async read() {
+      if (!idbSupported()) return null;
+      try {
+        const value = await withTimeout(vaultTx('readonly', (store, done) => {
+          const req = store.get(VAULT_KEY);
+          req.onsuccess = () => done(req.result || null);
+        }));
+        if (!value) return null;
+        const cfg = value && value.config ? value.config : value;
+        return (cfg && typeof cfg === 'object' && cfg.apiKey) ? cfg : null;
+      } catch (e) {
+        console.warn('[meal-log] IndexedDB 설정 읽기 실패 — localStorage만 사용합니다.', e);
+        return null;
+      }
+    },
+    async write(cfg) {
+      if (!idbSupported()) return false;
+      try {
+        await withTimeout(vaultTx('readwrite', (store) => {
+          store.put({ config: cfg, savedAt: Date.now() }, VAULT_KEY);
+        }));
+        return true;
+      } catch (e) {
+        console.warn('[meal-log] IndexedDB 설정 저장 실패 — localStorage만 사용합니다.', e);
+        return false;
+      }
+    },
+    async clear() {
+      if (!idbSupported()) return false;
+      try {
+        await withTimeout(vaultTx('readwrite', (store) => { store.delete(VAULT_KEY); }));
+        return true;
+      } catch (e) {
+        console.warn('[meal-log] IndexedDB 설정 삭제 실패', e);
+        return false;
+      }
+    },
+  };
 
   /** Firebase 콘솔의 JS 스니펫/JSON 어느 쪽이든 받아 객체로 */
   function parseConfig(text) {
@@ -79,8 +189,33 @@
 
     /* ------------------------------------------------------- bootstrap */
 
+    /** localStorage + IndexedDB 양쪽에 같은 설정을 보관한다 */
+    async saveConfig(cfg) {
+      try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch (e) { /* noop */ }
+      await Vault.write(cfg);
+      return cfg;
+    },
+
+    hasStoredConfig() { return !!readConfig(); },
+
+    /** localStorage가 비워졌으면 IndexedDB에 남은 설정을 되살린다 */
+    async restoreConfig() {
+      let cfg = readConfig();
+      if (cfg) return cfg;
+      cfg = await Vault.read();
+      if (cfg) {
+        try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch (e) { /* noop */ }
+      }
+      return cfg;
+    },
+
     async boot() {
-      const cfg = readConfig();
+      let cfg = null;
+      try {
+        cfg = await this.restoreConfig();
+      } catch (e) {
+        console.warn('[meal-log] 저장된 Firebase 설정을 불러오지 못했어요', e);
+      }
       if (!cfg) { this._setStatus('local'); return; }
       try {
         await this.connect(cfg, { silent: true });
@@ -107,6 +242,18 @@
       if (!cfg || !cfg.apiKey) throw new Error('Firebase 설정이 올바르지 않아요.');
 
       this._setStatus('connecting', '');
+      try {
+        // 붙여넣은 설정은 연결 성공 여부와 상관없이 이중 보관한다
+        await this.saveConfig(cfg);
+        this.projectId = cfg.projectId || '';
+        return await this._start(cfg, o);
+      } catch (e) {
+        this._setStatus('error', e && e.message ? e.message : '연결에 실패했어요.');
+        throw e;
+      }
+    },
+
+    async _start(cfg, o) {
       const { appMod, authMod, fsMod } = await this._loadSdk();
 
       if (this._app) {
@@ -119,8 +266,6 @@
       this._fsMod = fsMod;
       this._authMod = authMod;
       this.projectId = cfg.projectId || '';
-
-      try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch (e) { /* noop */ }
 
       // 리디렉션 로그인 결과 확인 (모바일 팝업 차단 대비)
       try { await authMod.getRedirectResult(this._auth); } catch (e) { /* noop */ }
@@ -172,7 +317,9 @@
         try { await this._sdk.appMod.deleteApp(this._app); } catch (e) { /* noop */ }
       }
       this._app = null; this._auth = null; this._db = null; this.user = null;
+      this.projectId = '';
       try { localStorage.removeItem(CFG_KEY); } catch (e) { /* noop */ }
+      await Vault.clear();
       this._setStatus('local');
     },
 

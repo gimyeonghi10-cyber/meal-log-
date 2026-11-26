@@ -61,6 +61,11 @@
   const $ = U.$;
   const $$ = U.$$;
 
+  /* Firebase 설정 입력란 — 저장된 원문 대신 가림 안내를 보여준다 (v1.4.1) */
+  const FB_PLACEHOLDER_EMPTY = $('#fbConfig') ? $('#fbConfig').getAttribute('placeholder') : '';
+  const FB_PLACEHOLDER_MASKED = '•••••••• (저장된 설정 사용 중 · 새 값을 붙여넣어 바꿀 수 있어요)';
+  let fbEditorOpen = false;
+
   /* ============================================================== render */
 
   function render(change) {
@@ -961,6 +966,7 @@
   function closeModal(id) {
     const el = typeof id === 'string' ? document.getElementById(id) : id;
     if (!el) return;
+    if (el.id === 'settingsModal') resetFbConfigEditor();
     el.hidden = true;
     if (!document.querySelector('.modal:not([hidden])')) document.body.style.overflow = '';
   }
@@ -1828,10 +1834,21 @@
 
     // Firebase
     $('#btnConnect').addEventListener('click', connectFirebase);
+    $('#btnEditConfig').addEventListener('click', () => {
+      fbEditorOpen = true;
+      const ta = $('#fbConfig');
+      ta.value = '';                       // 저장된 원문은 채우지 않는다
+      renderSettings(true);
+      ta.focus();
+    });
+    $('#fbConfig').addEventListener('input', () => {
+      $('#fbConfig').classList.toggle('is-masked', !$('#fbConfig').value.trim() && !!Sync.getConfig());
+    });
     $('#btnPasteConfig').addEventListener('click', async () => {
       try {
         const text = await navigator.clipboard.readText();
         $('#fbConfig').value = text;
+        $('#fbConfig').classList.remove('is-masked');
         U.toast('클립보드에서 붙여넣었어요');
       } catch (e) {
         U.toast('브라우저가 붙여넣기를 막았어요. 직접 붙여넣어 주세요.', 'warn');
@@ -1851,6 +1868,7 @@
     $('#btnForgetConfig').addEventListener('click', async () => {
       if (!window.confirm('이 기기에서 Firebase 연결을 해제할까요?\n로컬 기록은 그대로 남습니다.')) return;
       await Sync.disconnect();
+      resetFbConfigEditor();
       U.toast('연결을 해제했어요');
       renderSettings(true);
     });
@@ -1907,19 +1925,49 @@
   async function connectFirebase() {
     const errBox = $('#fbError');
     errBox.hidden = true;
-    const text = $('#fbConfig').value.trim();
+    const ta = $('#fbConfig');
+    const text = ta.value.trim();
+    const saved = Sync.getConfig();
+
+    // 저장된 설정이 있는데 새 값을 붙여넣지 않았다 → 기존 설정을 덮어쓰지 않는다
+    if (!text && saved) {
+      fbEditorOpen = false;
+      renderSettings(true);
+      if (Sync.status === 'error' || Sync.status === 'local') {
+        try {
+          await Sync.connect(saved, { silent: true });
+          U.toast('저장된 설정으로 다시 연결했어요');
+        } catch (e) {
+          U.toast('연결에 실패했어요. 저장된 설정은 그대로 두었습니다.', 'warn');
+        }
+        renderSettings(true);
+      } else {
+        U.toast('저장된 설정을 그대로 사용하고 있어요');
+      }
+      return;
+    }
+
     try {
       await Sync.connect(text);
-      const cfg = Sync.getConfig();
+      ta.value = '';
+      ta.classList.remove('is-masked');
+      fbEditorOpen = false;
       U.toast('Firebase에 연결했어요');
       renderSettings(true);
       if (!Sync.isSignedIn()) {
         U.toast('이제 Google로 로그인해 주세요', undefined);
       }
     } catch (e) {
+      // 설정 자체는 이미 보관됐을 수 있다 — 입력란의 원문은 지우고 가림 표시로 돌린다
+      if (Sync.status === 'error' && Sync.getConfig()) {
+        ta.value = '';
+        ta.classList.remove('is-masked');
+        fbEditorOpen = true;
+      }
       errBox.hidden = false;
       errBox.textContent = e && e.message ? e.message : '연결에 실패했어요.';
       errBox.className = 'helper helper--tight is-error';
+      renderSettings(true);
       console.warn(e);
     }
   }
@@ -1941,6 +1989,18 @@
     renderSettings(true);
   }
 
+  /** 설정 모달을 닫을 때 입력란에 남은 원문·오류 문구를 지운다 */
+  function resetFbConfigEditor() {
+    fbEditorOpen = false;
+    const ta = $('#fbConfig');
+    if (ta && Sync.getConfig()) {
+      ta.value = '';
+      ta.classList.remove('is-masked');
+    }
+    const errBox = $('#fbError');
+    if (errBox) { errBox.hidden = true; errBox.textContent = ''; }
+  }
+
   function renderSettings(force) {
     const modal = $('#settingsModal');
     if (!modal) return;
@@ -1960,7 +2020,20 @@
     const cfg = Sync.getConfig();
     const connected = !!cfg && (Sync.status === 'online' || Sync.status === 'signedout' || Sync.status === 'connecting' || Sync.status === 'error');
     $('#fbConnected').hidden = !connected;
-    $('#fbDisconnected').hidden = connected;
+    $('#fbSavedConfig').hidden = !cfg;
+    $('#fbDisconnected').hidden = connected && !fbEditorOpen;
+    $('#btnEditConfig').hidden = fbEditorOpen;
+
+    const ta = $('#fbConfig');
+    if (cfg) {
+      $('#fbSavedProject').textContent = cfg.projectId ? `프로젝트 ${cfg.projectId}` : '저장된 설정';
+      ta.placeholder = FB_PLACEHOLDER_MASKED;
+      $('#fbConfigLabel').textContent = 'Firebase 구성(JSON) — 새 값으로 바꾸기';
+    } else {
+      ta.placeholder = FB_PLACEHOLDER_EMPTY;
+      $('#fbConfigLabel').textContent = 'Firebase 구성(JSON)';
+    }
+    ta.classList.toggle('is-masked', !!cfg && !ta.value);
 
     if (connected) {
       const user = Sync.user;
@@ -1999,8 +2072,6 @@
           ? `실시간 동기화 중 · 이 기기 기록 ${dayCount}일`
           : Sync.status === 'connecting' ? '연결하는 중…' : 'Google 로그인 후 동기화가 시작됩니다.';
       $('#btnSyncNow').disabled = !user;
-    } else {
-      if (!$('#fbConfig').value && cfg) $('#fbConfig').value = JSON.stringify(cfg, null, 2);
     }
 
     const meta = Store.state.meta || {};
@@ -2103,7 +2174,7 @@
     // 설정 화면의 사전 권수를 실제 데이터에 맞춘다
     if (FOOD_DB) {
       const meta = document.querySelector('.app-meta');
-      if (meta) meta.textContent = `식사일지 v1.4.0 · 한국 음식 칼로리 사전 ${FOOD_DB.count}종 · 화이트/카키/네이비 테마 · 로컬 저장 + Firebase 선택 동기화`;
+      if (meta) meta.textContent = `식사일지 v1.4.1 · 한국 음식 칼로리 사전 ${FOOD_DB.count}종 · 화이트/카키/네이비 테마 · 로컬 저장 + Firebase 선택 동기화`;
     }
 
     Store.subscribe((s, change) => {
