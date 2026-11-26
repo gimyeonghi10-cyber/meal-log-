@@ -558,8 +558,14 @@
           </div>
         </div>
 
+        <div id="fbSavedConfig" class="saved-config" hidden>
+          <span class="saved-config__mask" aria-hidden="true">••••••••••••</span>
+          <span class="saved-config__note">저장된 설정 사용 중 · <span id="fbSavedProject">프로젝트</span></span>
+          <button class="btn btn--ghost btn--sm" id="btnEditConfig" type="button">설정 값 바꾸기</button>
+        </div>
+
         <div id="fbDisconnected">
-          <label class="field__label" for="fbConfig">Firebase 구성(JSON)</label>
+          <label class="field__label" for="fbConfig" id="fbConfigLabel">Firebase 구성(JSON)</label>
           <textarea class="text-input textarea" id="fbConfig" rows="6" spellcheck="false"
             placeholder='{
   "apiKey": "AIza...",
@@ -597,7 +603,7 @@
         <div class="settings-block__head"><h3>기록 관리</h3></div>
         <p class="helper">브라우저에 저장된 이 기기의 기록만 지웁니다. 동기화된 기록은 Firestore에 그대로 남아 있어요.</p>
         <button class="btn btn--danger btn--sm" id="btnReset" type="button">로컬 기록 모두 지우기</button>
-        <p class="helper helper--tight app-meta">식사일지 v1.4.0 · 한국 음식 칼로리 사전 213종 · 화이트/카키/네이비 테마 · 로컬 저장 + Firebase 선택 동기화</p>
+        <p class="helper helper--tight app-meta">식사일지 v1.4.1 · 한국 음식 칼로리 사전 213종 · 화이트/카키/네이비 테마 · 로컬 저장 + Firebase 선택 동기화</p>
       </section>
     </div>
   </div>
